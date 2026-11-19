@@ -18,6 +18,7 @@ Examples
 Keys (stdin): r + Enter = recenter, q + Enter = quit.
 """
 import argparse
+import queue
 import os
 import select
 import shutil
@@ -105,6 +106,41 @@ def parse_rate(s):
     return int(float(s[:-1] if mul > 1 else s) * mul)
 
 
+class TeeToPlayer:
+    """Passes the FLV byte stream through unchanged and copies it into an ffplay window
+    (what the goggles receive, artifacts included). The copy runs in its own thread with
+    a bounded queue: if ffplay falls behind, it stops getting data — never the goggles."""
+
+    def __init__(self, f, pos):
+        x, y = (pos.split(",") + ["0"])[:2]
+        self.f = f
+        self.q = queue.Queue(maxsize=512)
+        self.p = subprocess.Popen(
+            ["ffplay", "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer", "-flags", "low_delay",
+             "-framedrop", "-sync", "ext", "-probesize", "32", "-analyzeduration", "0",
+             "-window_title", "vrstream preview (what the goggles get)",
+             "-left", x, "-top", y, "-x", "1920", "-y", "1080", "-f", "flv", "-i", "-"],
+            stdin=subprocess.PIPE, bufsize=0)
+        threading.Thread(target=self._feed, daemon=True).start()
+
+    def _feed(self):
+        while True:
+            b = self.q.get()
+            try:
+                self.p.stdin.write(b)
+            except (BrokenPipeError, OSError):
+                return
+
+    def read(self, n):
+        b = self.f.read(n)
+        if b:
+            try:
+                self.q.put_nowait(b)
+            except queue.Full:
+                pass
+        return b
+
+
 def build_ffmpeg_cmd(a):
     w, h = a.size.split("x")
     g = [a.ffmpeg, "-hide_banner", "-loglevel", "warning", "-nostdin",
@@ -132,7 +168,7 @@ def build_ffmpeg_cmd(a):
         raise SystemExit(f"unknown source {a.source}")
 
     hevc = a.codec == "hevc"
-    gop = str(a.gop)
+    gop = str(a.gop or 2 * a.fps)        # default 2 s: frequent IDRs cost quality (TCP is lossless)
     br = a.bitrate
     # 1-frame VBV: the encoder never queues more than a frame of bits
     vbv_frames = getattr(a, "vbv_frames", 1.0)
@@ -140,8 +176,9 @@ def build_ffmpeg_cmd(a):
     ir = getattr(a, "intra_refresh", False)
     # kmsgrab hands out DRM-PRIME frames: map them into VAAPI and let the GPU convert/scale
     # (any framebuffer format the GPU reads), then encode on the GPU or download small NV12
-    kms_gpu = (f"hwmap=derive_device=vaapi,scale_vaapi=w={w}:h={h}:format=nv12:"
-               f"out_color_matrix=bt709:out_range=tv")
+    kms_gpu = (f"hwmap=derive_device=vaapi,scale_vaapi=w={w}:h={h}:format=nv12:mode=hq:"
+               f"force_original_aspect_ratio=decrease:out_color_matrix=bt709:out_range=tv,"
+               f"pad_vaapi=w={w}:h={h}:x=(ow-iw)/2:y=(oh-ih)/2:color=black")
     to_yuv = (f"scale={w}:{h}:flags=fast_bilinear:out_color_matrix=bt709:out_range=tv,format=yuv420p"
               if a.source != "kms" else kms_gpu + ",hwdownload,format=nv12")
     color = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"]
@@ -162,8 +199,8 @@ def build_ffmpeg_cmd(a):
                "-bf", "0", "-g", gop, "-slices", str(a.slices)]
         if ir:
             enc += ["-intra-refresh", "1"]
-        if not hevc:
-            enc += ["-profile:v", "baseline", "-coder", "cavlc"]
+        if not hevc:   # the goggles decode in hardware: high/CABAC (+1.3 dB vs baseline/CAVLC)
+            enc += ["-profile:v", "high", "-coder", "cabac"]
     elif a.encoder == "vaapi":
         if a.source == "kms":                 # zero-copy: capture → GPU scale → GPU encode
             pre = ["-vf", kms_gpu]
@@ -173,8 +210,8 @@ def build_ffmpeg_cmd(a):
         enc = pre + ["-c:v", "hevc_vaapi" if hevc else "h264_vaapi",
                "-bf", "0", "-g", gop, "-slices", str(a.slices), "-rc_mode", "CBR",
                "-async_depth", "1"]          # default 2 queues frames: +15 ms measured
-        if not hevc:
-            enc += ["-profile:v", "constrained_baseline", "-coder", "cavlc"]
+        if not hevc:   # measured at 30M: baseline/CAVLC 45.2 dB → high/CABAC 46.5 dB PSNR
+            enc += ["-profile:v", "high", "-coder", "cabac"]
     else:
         raise SystemExit(f"unknown encoder {a.encoder}")
 
@@ -476,18 +513,21 @@ def main():
     ap.add_argument("--encoder", default="auto", choices=["auto", "x264", "nvenc", "vaapi"])
     ap.add_argument("--vaapi-device", default="/dev/dri/renderD128")
     ap.add_argument("--bitrate", default="12M")
-    ap.add_argument("--gop", type=int, default=30, help="keyframe interval (frames) — also the loss-recovery time")
+    ap.add_argument("--gop", type=int, default=0, help="keyframe interval in frames (default 2 s)")
     ap.add_argument("--slices", type=int, default=4, help="slices per frame (= decoder threads on the goggles)")
     ap.add_argument("--intra-refresh", action="store_true",
                     help="gradual intra refresh instead of periodic IDR (no keyframe bursts; x264/x265/nvenc)")
-    ap.add_argument("--vbv-frames", type=float, default=1.0,
-                    help="encoder VBV size in frames of bitrate (1 = no frame ever exceeds 1/fps of airtime)")
+    ap.add_argument("--vbv-frames", type=float, default=4.0,
+                    help="encoder VBV size in frames of bitrate (default 4: keyframes get room; USB moves 4 frames in ~1 ms)")
     ap.add_argument("--ffmpeg-extra", default="", help="extra ffmpeg output args")
     ap.add_argument("--no-video", action="store_true", help="head tracking only")
     ap.add_argument("--opentrack", default="127.0.0.1:4242",
                     help="send pose to opentrack 'UDP over network' input (''=off)")
     ap.add_argument("--print-pose", action="store_true")
     ap.add_argument("--print-cmd", action="store_true", help="print the ffmpeg command and exit")
+    ap.add_argument("--preview", nargs="?", const="0,160", default=None, metavar="X,Y",
+                    help="also show the exact encoded stream in an ffplay window at screen position X,Y "
+                         "(default 0,160 = DP-1 here)")
     a = ap.parse_args()
 
     if a.print_cmd:
@@ -509,6 +549,7 @@ def main():
         threading.Thread(target=stdin_loop, args=(link,), daemon=True).start()
 
     ff = None
+    src = None
     try:
         if a.no_video:
             while link.alive:
@@ -524,6 +565,8 @@ def main():
             log("encoder:", " ".join(cmd))
             ff = subprocess.Popen(cmd, stdout=subprocess.PIPE, bufsize=0)
             src = ff.stdout
+        if a.preview:
+            src = TeeToPlayer(src, a.preview)
         for au, key, codec, ts in FlvReader(src).frames():
             if not link.alive:
                 break
@@ -549,6 +592,8 @@ def main():
                 link.send(VR_CTRL, bytes([VR_OP_QUIT]))
             except OSError:
                 pass
+        if isinstance(src, TeeToPlayer):
+            src.p.terminate()
         if ff:
             ff.terminate()
             try:
