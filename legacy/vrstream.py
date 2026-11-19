@@ -73,8 +73,11 @@ def deploy(adb, bridge_path, bridge_args):
     adb.run("push", bridge_path, f"{DEVICE_DIR}/vr_bridge")
     adb.shell(f"chmod 755 {DEVICE_DIR}/vr_bridge")
     stop_remote(adb)
-    # nohup so the bridge survives the adb shell; logs in /data/local/tmp/usbvr.log
-    adb.shell(f"nohup {DEVICE_DIR}/vr_bridge {bridge_args} >/dev/null 2>&1 < /dev/null &")
+    # nohup so the bridge survives the adb shell; logs in /data/local/tmp/usbvr.log.
+    # -1: exit when this PC session ends. While the bridge runs, the overlay draws its
+    # buffer over the whole UI, so a bridge left running = black goggles; on exit the
+    # overlay hands the display back (dji_glasses restart).
+    adb.shell(f"nohup {DEVICE_DIR}/vr_bridge -1 {bridge_args} >/dev/null 2>&1 < /dev/null &")
     time.sleep(0.8)
     pid = adb.shell("pidof vr_bridge", check=False)
     if not pid:
@@ -104,7 +107,7 @@ def parse_rate(s):
 
 def build_ffmpeg_cmd(a):
     w, h = a.size.split("x")
-    g = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin",
+    g = [a.ffmpeg, "-hide_banner", "-loglevel", "warning", "-nostdin",
          "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "32", "-analyzeduration", "0"]
     if a.source == "x11":
         region = a.region or a.size
@@ -450,6 +453,8 @@ def main():
     ap.add_argument("--display", default=os.environ.get("DISPLAY", ":0.0"))
     ap.add_argument("--region", help="x11 capture region WxH+X+Y (default: --size at 0,0)")
     ap.add_argument("--kms-device", default="/dev/dri/card0")
+    ap.add_argument("--ffmpeg", default=os.environ.get("VRSTREAM_FFMPEG", "ffmpeg"),
+                    help="ffmpeg binary (kms needs one with CAP_SYS_ADMIN, e.g. ~/.local/bin/ffmpeg-kms; env VRSTREAM_FFMPEG)")
     ap.add_argument("--input", help="file for --source file")
     ap.add_argument("--input-args", default="", help="ffmpeg input args for --source custom")
     ap.add_argument("--size", default="1920x1080", help="encoded size (goggles panel is 1920x1080)")
