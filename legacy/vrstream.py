@@ -116,7 +116,10 @@ def build_ffmpeg_cmd(a):
         g += ["-f", "x11grab", "-draw_mouse", "1", "-framerate", str(a.fps),
               "-video_size", f"{rw}x{rh}", "-i", f"{a.display}+{off}"]
     elif a.source == "kms":
-        g += ["-device", a.kms_device, "-f", "kmsgrab", "-framerate", str(a.fps), "-i", "-"]
+        g += ["-device", a.kms_device, "-f", "kmsgrab", "-framerate", str(a.fps)]
+        if a.kms_plane:
+            g += ["-plane_id", str(a.kms_plane)]
+        g += ["-i", "-"]
     elif a.source == "test":
         g += ["-re", "-f", "lavfi", "-i", f"testsrc2=size={a.size}:rate={a.fps}"]
     elif a.source == "file":
@@ -135,9 +138,12 @@ def build_ffmpeg_cmd(a):
     vbv_frames = getattr(a, "vbv_frames", 1.0)
     vbv = f"{max(1, int(parse_rate(br) * vbv_frames / a.fps / 1000))}k"
     ir = getattr(a, "intra_refresh", False)
+    # kmsgrab hands out DRM-PRIME frames: map them into VAAPI and let the GPU convert/scale
+    # (any framebuffer format the GPU reads), then encode on the GPU or download small NV12
+    kms_gpu = (f"hwmap=derive_device=vaapi,scale_vaapi=w={w}:h={h}:format=nv12:"
+               f"out_color_matrix=bt709:out_range=tv")
     to_yuv = (f"scale={w}:{h}:flags=fast_bilinear:out_color_matrix=bt709:out_range=tv,format=yuv420p"
-              if a.source != "kms" else
-              f"hwdownload,format=bgr0,scale={w}:{h}:flags=fast_bilinear:out_color_matrix=bt709:out_range=tv,format=yuv420p")
+              if a.source != "kms" else kms_gpu + ",hwdownload,format=nv12")
     color = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"]
 
     if a.encoder in ("x264", "auto"):          # software: libx264 / libx265
@@ -159,8 +165,12 @@ def build_ffmpeg_cmd(a):
         if not hevc:
             enc += ["-profile:v", "baseline", "-coder", "cavlc"]
     elif a.encoder == "vaapi":
-        up = to_yuv.replace("format=yuv420p", "format=nv12") + ",hwupload"
-        enc = ["-vaapi_device", a.vaapi_device, "-vf", up, "-c:v", "hevc_vaapi" if hevc else "h264_vaapi",
+        if a.source == "kms":                 # zero-copy: capture → GPU scale → GPU encode
+            pre = ["-vf", kms_gpu]
+        else:
+            pre = ["-vaapi_device", a.vaapi_device, "-vf",
+                   to_yuv.replace("format=yuv420p", "format=nv12") + ",hwupload"]
+        enc = pre + ["-c:v", "hevc_vaapi" if hevc else "h264_vaapi",
                "-bf", "0", "-g", gop, "-slices", str(a.slices), "-rc_mode", "CBR",
                "-async_depth", "1"]          # default 2 queues frames: +15 ms measured
         if not hevc:
@@ -453,6 +463,9 @@ def main():
     ap.add_argument("--display", default=os.environ.get("DISPLAY", ":0.0"))
     ap.add_argument("--region", help="x11 capture region WxH+X+Y (default: --size at 0,0)")
     ap.add_argument("--kms-device", default="/dev/dri/card0")
+    ap.add_argument("--kms-plane", type=int, default=0,
+                    help="DRM plane to capture (one per monitor; 0 = first with a framebuffer). "
+                         "Needs an 8-bit framebuffer: KDE uses 10-bit unless KWIN_DRM_PREFER_COLOR_DEPTH=24")
     ap.add_argument("--ffmpeg", default=os.environ.get("VRSTREAM_FFMPEG", "ffmpeg"),
                     help="ffmpeg binary (kms needs one with CAP_SYS_ADMIN, e.g. ~/.local/bin/ffmpeg-kms; env VRSTREAM_FFMPEG)")
     ap.add_argument("--input", help="file for --source file")
