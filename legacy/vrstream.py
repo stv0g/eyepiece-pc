@@ -176,9 +176,10 @@ def build_ffmpeg_cmd(a):
     ir = getattr(a, "intra_refresh", False)
     # kmsgrab hands out DRM-PRIME frames: map them into VAAPI and let the GPU convert/scale
     # (any framebuffer format the GPU reads), then encode on the GPU or download small NV12
-    kms_gpu = (f"hwmap=derive_device=vaapi,scale_vaapi=w={w}:h={h}:format=nv12:mode=hq:"
-               f"force_original_aspect_ratio=decrease:out_color_matrix=bt709:out_range=tv,"
-               f"pad_vaapi=w={w}:h={h}:x=(ow-iw)/2:y=(oh-ih)/2:color=black")
+    # bars are added while still RGB: pad_vaapi on NV12 writes Y=U=V=0 (green) whatever color=
+    kms_gpu = (f"hwmap=derive_device=vaapi,scale_vaapi=w={w}:h={h}:mode=hq:force_original_aspect_ratio=decrease,"
+               f"pad_vaapi=w={w}:h={h}:x=(ow-iw)/2:y=(oh-ih)/2:color=black,"
+               f"scale_vaapi=format=nv12:out_color_matrix=bt709:out_range=tv")
     to_yuv = (f"scale={w}:{h}:flags=fast_bilinear:out_color_matrix=bt709:out_range=tv,format=yuv420p"
               if a.source != "kms" else kms_gpu + ",hwdownload,format=nv12")
     color = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"]
@@ -216,12 +217,14 @@ def build_ffmpeg_cmd(a):
         raise SystemExit(f"unknown encoder {a.encoder}")
 
     g += enc + color + ["-b:v", br, "-maxrate", br, "-bufsize", vbv, "-an"]
-    if a.source in ("x11", "kms"):
-        # x11grab/kmsgrab stamp frames with wall-clock capture time: keep it
-        # (shifted to fit FLV's 32-bit ms) so latency is measured from capture
+    if a.source in ("x11", "kms") and getattr(a, "capture_ts", False):
+        # keep the grabbers' wall-clock capture time (shifted to fit FLV's 32-bit ms) so latency
+        # is measured from capture. BROKEN for rate control: kmsgrab declares 1,000,000 fps, the
+        # encoder then budgets bitrate/1e6 per frame (0.2–0.5 Mbit/s, heavy blocking; level 6.2).
         a.ts_base = int(time.time()) - 10
         g += ["-copyts", "-output_ts_offset", str(-a.ts_base), "-fps_mode", "passthrough"]
     else:
+        # constant frame rate: the encoder knows the real fps → correct bit budget per frame
         a.ts_base = None
         g += ["-r", str(a.fps)]
     if a.ffmpeg_extra:
@@ -457,7 +460,7 @@ class Link:
                 cap, self.cap_lat = self.cap_lat, []
             msg = (f"sent {s_sent / interval:5.1f} fps {s_bytes * 8 / interval / 1e6:5.1f} Mbit/s | "
                    f"shown {s['frames'] / interval:5.1f} fps | "
-                   f"{'capture' if self.a.source in ('x11', 'kms') else 'send'}→shown "
+                   f"{'capture' if self.a.ts_base is not None else 'send'}→shown "
                    f"p50 {pct(s['lat'], .5):5.1f} ms p95 {pct(s['lat'], .95):5.1f} ms"
                    f"{f' (capture→send {pct(cap, .5):4.1f})' if cap else ''} | "
                    f"decode {pct(s['dec'], .5):4.1f} ms convert {pct(s['cvt'], .5):4.1f} ms | "
@@ -525,6 +528,9 @@ def main():
                     help="send pose to opentrack 'UDP over network' input (''=off)")
     ap.add_argument("--print-pose", action="store_true")
     ap.add_argument("--print-cmd", action="store_true", help="print the ffmpeg command and exit")
+    ap.add_argument("--capture-ts", action="store_true",
+                    help="x11/kms: carry capture timestamps for capture→shown stats (starves the encoder's "
+                         "rate control with kmsgrab — diagnostics only)")
     ap.add_argument("--preview", nargs="?", const="0,160", default=None, metavar="X,Y",
                     help="also show the exact encoded stream in an ffplay window at screen position X,Y "
                          "(default 0,160 = DP-1 here)")
@@ -593,7 +599,7 @@ def main():
             except OSError:
                 pass
         if isinstance(src, TeeToPlayer):
-            src.p.terminate()
+            src.p.kill()          # ffplay ignores SIGTERM while its SDL window is open
         if ff:
             ff.terminate()
             try:
