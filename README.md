@@ -109,16 +109,11 @@ session); its log is `/data/local/tmp/eyepiece.log` on the goggles.
 
 ### Resolution (`--size`)
 
-`--size 1280x720` or `--size 960x540` encode a smaller picture (scaled and letterboxed on the
-GPU in the same pass as the NV12 conversion); the bridge scales it back up to the 1920x1080
-panel with the display's VIDEO0 plane scaler (aspect kept, centred). Trade-off: encode and
-decode time scale roughly with the pixel count, so 720p (44 % of the pixels) saves about
-1–2 ms each on NVENC (~4 ms at 1080p) and the VC8000D (~3 ms), i.e. roughly 2–3 ms of the
-~12 ms capture→shown; 540p about 4 ms. The cost is a 1.5× (2×) upscale on a panel that
-shows 1080p per eye: desktop text gets clearly soft. Keep the default 1920x1080 for desktop
-work; 720p can make sense for games/video, or for a low `--bitrate` (more bits per pixel).
-Needs a bridge with plane scaling (natartos `eyepiece` after 2026-11-20); older bridges show
-smaller streams 1:1 in the top-left corner.
+`--size 1280x720` or `--size 960x540` encode a smaller picture. The goggles have no plane
+scaler, so it is shown **1:1, centred, with a black border** (a smaller window, not an upscale).
+Measured with the test source (x264): capture→shown 12.0 ms at 1080p, 9.3 ms at 720p, about
+6.5 ms at 540p — encode and decode time scale with the pixel count. Use it when latency matters
+more than picture size; the default 1920x1080 fills the panel.
 
 Stdin: `r` recenter, `i` force an IDR, `q` quit (each + Enter). Ctrl-C quits cleanly
 (twice: hard). `--dump out.h264` also writes the exact Annex-B stream; `--no-connect
