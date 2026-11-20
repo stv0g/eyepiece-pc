@@ -428,5 +428,14 @@ fn real_main(a: Args, log: LogFn) -> Result<(), String> {
         }
     }
     let lg = log.clone();
-    session::run(cfg, ctl, Events { log, stats: Arc::new(move |s| lg(s.line())) })
+    let deployed = a.deploy && !a.no_connect;
+    let res = session::run(cfg, ctl, Events { log: log.clone(), stats: Arc::new(move |s| lg(s.line())) });
+    if deployed {
+        // the -1 bridge exits with the session; make sure the MCU attitude stream is off
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        if let Some(l) = Adb::new(a.adb.clone(), a.serial.clone()).mcu_stop_safety() {
+            log(l);
+        }
+    }
+    res
 }

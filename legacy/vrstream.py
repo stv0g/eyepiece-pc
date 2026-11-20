@@ -95,7 +95,21 @@ def stop_remote(adb):
     pid = adb.shell("pidof vr_bridge", check=False)
     if pid:
         adb.shell(f"kill {pid}", check=False)
-        time.sleep(0.5)
+        time.sleep(2.5)            # bridge helper sends the MCU attitude stop on SIGTERM
+    mcu_stop_safety(adb)
+
+
+def mcu_stop_safety(adb):
+    """Belt and braces for the MCU head-attitude stream: if no bridge is running, send the
+    stop (vr_bridge -Z). Covers the one case the bridge can't (bridge and its helper both
+    SIGKILLed): the stream outlives them and logs a router error per packet. Harmless when
+    the stream is already off (MCU ACKs 00)."""
+    if adb.shell("pidof vr_bridge", check=False):
+        return
+    out = adb.shell(f"[ -x {DEVICE_DIR}/vr_bridge ] && {DEVICE_DIR}/vr_bridge -Z 2>&1 | grep 'MCU attitude'",
+                    check=False)
+    if out:
+        log(out.strip().replace("[usbvr] ", "goggles: "))
 
 
 # --------------------------------------------------------------------------- ffmpeg
@@ -410,8 +424,7 @@ class Link:
                 # opentrack "UDP over network" input: 6 little-endian doubles x,y,z,yaw,pitch,roll
                 self.ot.sendto(struct.pack("<6d", 0, 0, 0, yaw, pitch, roll), self.ot_addr)
             if self.a.print_pose:
-                print(f"pose yaw={yaw:7.2f} pitch={pitch:7.2f} active={active} src={'bus' if src == 1 else 'hook'}",
-                      flush=True)
+                print(f"pose yaw={yaw:7.2f} pitch={pitch:7.2f} roll={roll:7.2f} src={src}", flush=True)
         elif mtype == VR_PONG:
             t_pc, t_dev = struct.unpack("<QQ", p[:16])
             now = mono_us()
@@ -460,7 +473,7 @@ class Link:
                 cap, self.cap_lat = self.cap_lat, []
             msg = (f"sent {s_sent / interval:5.1f} fps {s_bytes * 8 / interval / 1e6:5.1f} Mbit/s | "
                    f"shown {s['frames'] / interval:5.1f} fps | "
-                   f"{'capture' if self.a.ts_base is not None else 'send'}→shown "
+                   f"{'capture' if getattr(self.a, 'ts_base', None) is not None else 'send'}→shown "
                    f"p50 {pct(s['lat'], .5):5.1f} ms p95 {pct(s['lat'], .95):5.1f} ms"
                    f"{f' (capture→send {pct(cap, .5):4.1f})' if cap else ''} | "
                    f"decode {pct(s['dec'], .5):4.1f} ms convert {pct(s['cvt'], .5):4.1f} ms | "
@@ -598,6 +611,9 @@ def main():
                 link.send(VR_CTRL, bytes([VR_OP_QUIT]))
             except OSError:
                 pass
+        if a.deploy:              # the -1 bridge exits with the session; make sure the
+            time.sleep(3)         # MCU attitude stream is off afterwards
+            mcu_stop_safety(adb)
         if isinstance(src, TeeToPlayer):
             src.p.kill()          # ffplay ignores SIGTERM while its SDL window is open
         if ff:

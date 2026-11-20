@@ -52,9 +52,29 @@ impl Adb {
         if let Ok(pid) = self.shell("pidof vr_bridge", false) {
             if !pid.is_empty() {
                 let _ = self.shell(&format!("kill {pid}"), false);
-                std::thread::sleep(Duration::from_millis(500));
+                // the bridge's helper sends the MCU head-attitude stop on SIGTERM
+                std::thread::sleep(Duration::from_millis(2500));
             }
         }
+        self.mcu_stop_safety();
+    }
+
+    /// Belt and braces for the MCU head-attitude stream: with no bridge running, send the
+    /// stop (`vr_bridge -Z`). Covers the case the bridge can't handle itself (bridge and
+    /// helper both SIGKILLed): the stream outlives them and logs a router error per packet
+    /// on the goggles. Harmless when the stream is already off. Returns the bridge's line.
+    pub fn mcu_stop_safety(&self) -> Option<String> {
+        if !self.shell("pidof vr_bridge", false).unwrap_or_default().trim().is_empty() {
+            return None;
+        }
+        let out = self
+            .shell(
+                &format!("[ -x {DEVICE_DIR}/vr_bridge ] && {DEVICE_DIR}/vr_bridge -Z 2>&1 | grep 'MCU attitude'"),
+                false,
+            )
+            .unwrap_or_default();
+        let out = out.trim().replace("[usbvr] ", "goggles: ");
+        (!out.is_empty()).then_some(out)
     }
 
     /// Push `bridge` to the goggles and start it with `-1` (exit with the PC session: a

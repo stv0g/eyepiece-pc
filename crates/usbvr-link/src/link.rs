@@ -296,11 +296,8 @@ impl Link {
                 }
                 if sh.print_pose {
                     println!(
-                        "pose yaw={:7.2} pitch={:7.2} active={} src={}",
-                        pose.yaw,
-                        pose.pitch,
-                        pose.active,
-                        if pose.source == VR_POSE_SRC_BUS { "bus" } else { "hook" }
+                        "pose yaw={:7.2} pitch={:7.2} roll={:7.2} src={}",
+                        pose.yaw, pose.pitch, pose.roll, pose.source
                     );
                 }
             }
@@ -354,7 +351,6 @@ impl Link {
     }
 }
 
-pub const VR_POSE_SRC_BUS: u8 = 1;
 
 /// writev until everything is written (std's write_all_vectored is unstable).
 fn write_all_vectored(s: &mut TcpStream, parts: &[&[u8]]) -> std::io::Result<()> {
