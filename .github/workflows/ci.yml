@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # FFmpeg major the bindings are generated against (dev machine: Debian, FFmpeg 9.0.x)
+  FFMPEG_WIN_ZIP: ffmpeg-n9.0-latest-win64-gpl-shared-9.0
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    # Debian testing ships FFmpeg 9 (libavcodec 63) like the dev machine; Ubuntu runners don't.
+    # Not pinned to a snapshot: a testing transition can change the FFmpeg major.
+    container: debian:testing
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config clang libclang-dev \
+            libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libdrm-dev \
+            libpipewire-0.3-dev libspa-0.2-dev
+          apt-cache policy libavcodec-dev | head -3
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked
+      - name: Test
+        run: cargo test --release --locked
+      - name: Clippy
+        run: cargo clippy --release --locked --all-targets
+      # PipeWire/portal capture: compiles locally only with the -dev packages, never run.
+      # If it builds, it becomes the Linux release binary.
+      - name: Build with PipeWire (optional)
+        id: pipewire
+        continue-on-error: true
+        run: cargo build --release --locked --features pipewire --target-dir target/pw
+      - name: Package
+        shell: bash
+        run: |
+          case "$GITHUB_REF" in refs/tags/*) ver="$GITHUB_REF_NAME" ;; *) ver="${GITHUB_SHA::7}" ;; esac
+          name="eyepiece-pc-$ver-linux-x86_64"
+          mkdir -p "dist/$name"
+          if [ "${{ steps.pipewire.outcome }}" = success ]; then
+            cp target/pw/release/eyepiece-pc "dist/$name/"; feat="x11,kms,pipewire"
+          else
+            cp target/release/eyepiece-pc "dist/$name/"; feat="x11,kms"
+          fi
+          echo "eyepiece-pc $ver, features: $feat, built on debian:testing ($(dpkg-query -W -f='${Version}' libavcodec-dev))" > "dist/$name/BUILD-INFO.txt"
+          cp README.md LICENSE "dist/$name/"
+          cp -r legacy "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*.tar.gz
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Fetch FFmpeg (BtbN shared build)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$env:FFMPEG_WIN_ZIP.zip"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath $env:RUNNER_TEMP
+          $ff = Join-Path $env:RUNNER_TEMP $env:FFMPEG_WIN_ZIP
+          "FFMPEG_DIR=$ff" >> $env:GITHUB_ENV
+          "FFMPEG_INCLUDE_DIR=$ff\include" >> $env:GITHUB_ENV
+          "FFMPEG_LIB_DIR=$ff\lib" >> $env:GITHUB_ENV
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+          "$ff\bin" >> $env:GITHUB_PATH
+      - name: Build
+        run: cargo build --release --locked
+      - name: Test
+        run: cargo test --release --locked
+      - name: Package
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like "refs/tags/*") { $ver = $env:GITHUB_REF_NAME } else { $ver = $env:GITHUB_SHA.Substring(0, 7) }
+          $name = "eyepiece-pc-$ver-windows-x86_64"
+          $d = "dist\$name"
+          New-Item -ItemType Directory -Force $d | Out-Null
+          Copy-Item target\release\eyepiece-pc.exe, README.md, LICENSE $d
+          Copy-Item "$env:FFMPEG_DIR\bin\*.dll" $d
+          Copy-Item "$env:FFMPEG_DIR\LICENSE.txt" "$d\FFMPEG-LICENSE.txt" -ErrorAction SilentlyContinue
+          Copy-Item -Recurse legacy $d
+          Compress-Archive -Path $d -DestinationPath "dist\$name.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+          generate_release_notes: true
