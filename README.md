@@ -104,8 +104,21 @@ eyepiece-pc --deploy --bridge-args=-M               # bridge display-timing metr
 ```
 
 Without `--deploy`, the bridge started from the goggles' menu is used. With `--deploy`, the
-bridge is pushed to `/data/local/tmp/eyepiece/` and started with `-1` (it exits with the PC
+bridge is pushed to `/data/local/tmp/eyepiece/` and started with `-1 -b` (it exits with the PC
 session); its log is `/data/local/tmp/eyepiece.log` on the goggles.
+
+### Resolution (`--size`)
+
+`--size 1280x720` or `--size 960x540` encode a smaller picture (scaled and letterboxed on the
+GPU in the same pass as the NV12 conversion); the bridge scales it back up to the 1920x1080
+panel with the display's VIDEO0 plane scaler (aspect kept, centred). Trade-off: encode and
+decode time scale roughly with the pixel count, so 720p (44 % of the pixels) saves about
+1–2 ms each on NVENC (~4 ms at 1080p) and the VC8000D (~3 ms), i.e. roughly 2–3 ms of the
+~12 ms capture→shown; 540p about 4 ms. The cost is a 1.5× (2×) upscale on a panel that
+shows 1080p per eye: desktop text gets clearly soft. Keep the default 1920x1080 for desktop
+work; 720p can make sense for games/video, or for a low `--bitrate` (more bits per pixel).
+Needs a bridge with plane scaling (natartos `eyepiece` after 2026-11-20); older bridges show
+smaller streams 1:1 in the top-left corner.
 
 Stdin: `r` recenter, `i` force an IDR, `q` quit (each + Enter). Ctrl-C quits cleanly
 (twice: hard). `--dump out.h264` also writes the exact Annex-B stream; `--no-connect

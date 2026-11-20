@@ -93,7 +93,7 @@ def deploy(adb, bridge_path, bridge_args):
     # -1: exit when this PC session ends. While the bridge runs, the overlay draws its
     # buffer over the whole UI, so a bridge left running = black goggles; on exit the
     # overlay hands the display back (dji_glasses restart).
-    adb.shell(f"nohup {DEVICE_DIR}/eyepiece_bridge -1 {bridge_args} >/dev/null 2>&1 < /dev/null &")
+    adb.shell(f"nohup {DEVICE_DIR}/eyepiece_bridge -1 -b {bridge_args} >/dev/null 2>&1 < /dev/null &")
     time.sleep(0.8)
     pid = adb.shell("pidof eyepiece_bridge", check=False)
     if not pid:

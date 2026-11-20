@@ -123,7 +123,7 @@ impl Adb {
         self.shell(&format!("chmod 755 {DEVICE_DIR}/eyepiece_bridge"), true)?;
         self.stop_bridge();
         self.shell(
-            &format!("nohup {DEVICE_DIR}/eyepiece_bridge -1 {extra_args} >/dev/null 2>&1 < /dev/null &"),
+            &format!("nohup {DEVICE_DIR}/eyepiece_bridge -1 -b {extra_args} >/dev/null 2>&1 < /dev/null &"),
             true,
         )?;
         std::thread::sleep(Duration::from_millis(800));
