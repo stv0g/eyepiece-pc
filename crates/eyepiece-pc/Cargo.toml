@@ -4,6 +4,7 @@ description = "PC side of Eyepiece: stream the PC screen to DJI Goggles 3 over U
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [features]
 default = ["x11"]

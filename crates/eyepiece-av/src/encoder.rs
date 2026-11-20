@@ -275,7 +275,11 @@ fn default_opts(f: Family, c: &EncoderConfig) -> Vec<(String, String)> {
 impl Encoder {
     /// Open for frames like `first` (format/size); `hw_frames`: the converter's output
     /// frames context for VAAPI.
-    pub fn open(cfg: &EncoderConfig, name: &str, first: &Frame, hw_frames: *mut AVBufferRef) -> Result<Encoder, String> {
+    ///
+    /// # Safety
+    /// `hw_frames` must be null or a valid `AVBufferRef` for the duration of the call
+    /// (the encoder takes its own reference).
+    pub unsafe fn open(cfg: &EncoderConfig, name: &str, first: &Frame, hw_frames: *mut AVBufferRef) -> Result<Encoder, String> {
         let fam = family(name);
         unsafe {
             let codec = avcodec_find_encoder_by_name(cstr(name).as_ptr());

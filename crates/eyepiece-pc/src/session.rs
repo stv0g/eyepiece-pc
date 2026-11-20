@@ -349,7 +349,8 @@ pub fn run(mut cfg: Config, ctl: Arc<Control>, ev: Events) -> Result<(), String>
             let t_enc_in = mono_us();
             let frame = it.frame;
             if enc.is_none() {
-                let e = Encoder::open(&cfg.enc, &enc_name, &frame, unsafe { (*frame.0).hw_frames_ctx })?;
+                // SAFETY: frame.0 is a live AVFrame; its hw_frames_ctx is null or valid.
+                let e = unsafe { Encoder::open(&cfg.enc, &enc_name, &frame, (*frame.0).hw_frames_ctx) }?;
                 log(format!("encoder: {}", e.description));
                 enc = Some(e);
             }

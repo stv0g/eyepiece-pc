@@ -4,6 +4,7 @@ description = "FFmpeg (libavcodec/libavfilter) encode + GPU convert pipeline for
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 libc = "0.2"

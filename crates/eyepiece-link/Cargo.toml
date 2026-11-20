@@ -4,6 +4,7 @@ description = "Eyepiece wire protocol, connection to eyepiece_bridge, clock sync
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 libc = "0.2"
