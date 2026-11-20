@@ -1,0 +1,9 @@
+[package]
+name = "eyepiece-link"
+description = "Eyepiece wire protocol, connection to eyepiece_bridge, clock sync, stats, adb helpers (no FFmpeg)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc = "0.2"

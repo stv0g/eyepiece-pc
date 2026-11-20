@@ -11,7 +11,7 @@
  * ffmpeg-kms has file capabilities, so LD_PRELOAD is ignored; link it in.
  * The library must live in a root-owned directory: a capability binary that
  * loads a user-writable library hands CAP_SYS_ADMIN to anything running as you.
- *   gcc -shared -fPIC -O2 -I/usr/include/libdrm -o libkmsfix.so usb-vr/pc/kmsfix.c -ldl
+ *   gcc -shared -fPIC -O2 -I/usr/include/libdrm -o libkmsfix.so legacy/kmsfix.c -ldl
  *   sudo install -m 755 -o root -g root libkmsfix.so /usr/local/lib/libkmsfix.so
  *   cp /usr/bin/ffmpeg ~/.local/bin/ffmpeg-kms
  *   patchelf --add-needed /usr/local/lib/libkmsfix.so ~/.local/bin/ffmpeg-kms

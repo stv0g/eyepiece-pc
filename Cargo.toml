@@ -1,11 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/usbvr-link", "crates/usbvr-capture", "crates/usbvr-av", "crates/usbvr"]
+members = ["crates/eyepiece-link", "crates/eyepiece-capture", "crates/eyepiece-av", "crates/eyepiece-pc"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/zuim/eyepiece-pc"
 
 [profile.release]
 opt-level = 3

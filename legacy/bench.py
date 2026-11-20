@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-bench.py — measure the PC half of the usb-vr pipeline without the goggles.
+bench.py — measure the PC half of the Eyepiece pipeline (legacy eyepiece_stream.py) without the goggles.
 
   encode   frame → encoded-AU latency per encoder/bitrate.  We write raw yuv420p
            frames into ffmpeg's stdin at the target fps and timestamp each one.
            CAVEAT (measured): ffmpeg's rawvideo/y4m pipe demuxers only release
            frame n once frame n+1 arrives, so this mode reads ONE FRAME (16.7 ms
            @60) high.  Use it to compare encoders/bitrates; for absolute numbers
-           use the real capture path (vrstream --source x11 prints capture→send).
-  python   cost of vrstream's FLV parse + socket send per frame, and the
+           use the real capture path (eyepiece_stream --source x11 prints capture→send).
+  python   cost of eyepiece_stream's FLV parse + socket send per frame, and the
            maximum frame rate it can sustain (no -re, as fast as possible).
 
   ./bench.py encode --encoder x264 --bitrate 12M
@@ -26,7 +26,7 @@ import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-spec = importlib.util.spec_from_file_location("vrstream", os.path.join(HERE, "vrstream.py"))
+spec = importlib.util.spec_from_file_location("eyepiece_stream", os.path.join(HERE, "eyepiece_stream.py"))
 vs = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(vs)
 
@@ -42,7 +42,7 @@ def make_frames(size, n):
 
 
 def encoder_args(a):
-    """Reuse vrstream's encoder settings, but with raw stdin as the input."""
+    """Reuse eyepiece_stream's encoder settings, but with raw stdin as the input."""
     class A: pass
     o = A()
     o.size, o.fps, o.codec, o.encoder, o.bitrate = a.size, a.fps, a.codec, a.encoder, a.bitrate

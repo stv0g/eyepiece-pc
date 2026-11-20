@@ -1,0 +1,15 @@
+[package]
+name = "eyepiece-av"
+description = "FFmpeg (libavcodec/libavfilter) encode + GPU convert pipeline for eyepiece"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc = "0.2"
+eyepiece-capture = { path = "../eyepiece-capture", default-features = false }
+eyepiece-link = { path = "../eyepiece-link" }
+
+[build-dependencies]
+bindgen = "0.72"
+pkg-config = "0.3"

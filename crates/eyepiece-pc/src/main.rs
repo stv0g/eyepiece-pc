@@ -1,0 +1,477 @@
+//! eyepiece-pc — stream the PC screen to DJI Goggles 3 over USB and get head tracking back.
+//! Replaces legacy/eyepiece_stream.py (same protocol, same bridge). See README.md.
+
+use clap::Parser;
+use std::io::BufRead;
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
+use eyepiece_pc::session::{self, Config, Control, Events, SourceKind};
+use eyepiece_av::{Codec, EncoderConfig};
+use eyepiece_capture::SyncMode;
+use eyepiece_link::adb::Adb;
+use eyepiece_link::{LinkOptions, LogFn};
+
+const BRIDGE_NAME: &str = "eyepiece_bridge";
+
+/// `--deploy` without `--bridge`: `eyepiece_bridge` next to this executable, else
+/// `$XDG_DATA_HOME/eyepiece/eyepiece_bridge` (default `~/.local/share/...`).
+fn find_bridge() -> Result<PathBuf, String> {
+    let mut tried = vec![];
+    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        tried.push(dir.join(BRIDGE_NAME));
+    }
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
+    if let Some(d) = data {
+        tried.push(d.join("eyepiece").join(BRIDGE_NAME));
+    }
+    if let Some(p) = tried.iter().find(|p| p.is_file()) {
+        return Ok(p.clone());
+    }
+    Err(format!(
+        "--deploy: {BRIDGE_NAME} not found (looked in: {}).\n  \
+         Download {BRIDGE_NAME} from the natartos release and put it there, or pass --bridge PATH.\n  \
+         Without --deploy, the bridge started from the goggles' menu (natartos Eyepiece mod) is used.",
+        tried.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+    ))
+}
+
+#[derive(Parser, Debug)]
+#[command(name = "eyepiece-pc", version, about = "Stream the PC screen to DJI Goggles 3 over USB (Eyepiece PC side)",
+    after_help = "Keys (stdin): r + Enter = recenter, i + Enter = force IDR, q + Enter = quit.\n\
+Examples:\n  eyepiece-pc                                 # bridge started from the goggles' menu\n  \
+eyepiece-pc --deploy                        # push + start eyepiece_bridge, KMS capture of the first screen\n  \
+eyepiece-pc --deploy --output eDP-1 --encoder nvenc --bitrate 30M\n  \
+eyepiece-pc --source test --host 127.0.0.1 --no-forward   # against eyepiece_bridge_host -N\n  \
+eyepiece-pc --list                          # outputs / planes")]
+struct Args {
+    // ---- transport ----
+    /// adb executable
+    #[arg(long, default_value = "adb")]
+    adb: String,
+    /// adb device serial
+    #[arg(long)]
+    serial: Option<String>,
+    /// TCP port (bridge listens on 127.0.0.1:PORT on the goggles)
+    #[arg(long, default_value_t = 42420)]
+    port: u16,
+    /// host to connect to (adb forward ends on 127.0.0.1; RNDIS/Wi-Fi: goggles IP + bridge -A)
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+    /// don't run `adb forward` (host bridge, RNDIS, forward set up elsewhere)
+    #[arg(long)]
+    no_forward: bool,
+    /// push the bridge to the goggles and start it (with -1: exits with this session).
+    /// Without it, the bridge started from the goggles' menu (natartos Eyepiece mod) is used.
+    #[arg(long)]
+    deploy: bool,
+    /// eyepiece_bridge binary for --deploy [default: next to this executable, else
+    /// $XDG_DATA_HOME/eyepiece/eyepiece_bridge]
+    #[arg(long)]
+    bridge: Option<PathBuf>,
+    /// extra eyepiece_bridge args for --deploy (e.g. --bridge-args=-M)
+    #[arg(long, default_value = "", allow_hyphen_values = true)]
+    bridge_args: String,
+    /// ask the bridge to exit when we quit
+    #[arg(long)]
+    stop_bridge: bool,
+    /// keep running when the bridge disconnects and reconnect (IDR on every connect)
+    #[arg(long)]
+    reconnect: bool,
+    /// don't connect to a bridge at all (encode only: benchmarks, --dump)
+    #[arg(long)]
+    no_connect: bool,
+
+    // ---- source ----
+    /// kms | pipewire | x11 | test | file | dxgi
+    #[arg(long, default_value = if cfg!(windows) { "dxgi" } else { "kms" })]
+    source: String,
+    /// kms: DRM device (the GPU driving the displays)
+    #[arg(long, default_value = "/dev/dri/card0")]
+    kms_device: String,
+    /// kms: plane id (0 = primary plane of --output / first active screen); see --list
+    #[arg(long, default_value_t = 0)]
+    kms_plane: u32,
+    /// kms: output (connector) name, e.g. eDP-1, DP-2
+    #[arg(long)]
+    output: Option<String>,
+    /// capture timing: vblank (PC display refresh, default) | poll (1 ms, takes a new
+    /// framebuffer as soon as the compositor commits it) | timer (free-running)
+    #[arg(long, default_value = "vblank")]
+    sync: String,
+    /// x11: display (default $DISPLAY)
+    #[arg(long)]
+    display: Option<String>,
+    /// x11: region WxH+X+Y (default: whole screen)
+    #[arg(long)]
+    region: Option<String>,
+    /// file: media file (looped)
+    #[arg(long)]
+    input: Option<String>,
+    /// test: lavfi source graph instead of testsrc2 (e.g. 'smptehdbars=size=1920x1080:rate=100')
+    #[arg(long)]
+    lavfi: Option<String>,
+    /// pipewire: file to keep the portal's restore token in (no dialog next time)
+    #[arg(long)]
+    restore_token: Option<PathBuf>,
+    /// pipewire: draw the cursor into the stream
+    #[arg(long)]
+    cursor: bool,
+    /// dxgi: adapter,output index
+    #[arg(long, default_value = "0,0")]
+    dxgi: String,
+    /// kms test aid without CAP_SYS_ADMIN: real vblank/flip pacing of the plane, content
+    /// from VAAPI test surfaces through the same DMA-BUF path
+    #[arg(long, hide = true)]
+    kms_simulate: bool,
+    /// list KMS outputs and planes, then exit
+    #[arg(long)]
+    list: bool,
+
+    // ---- video ----
+    /// encoded size (goggles panel: 1920x1080)
+    #[arg(long, default_value = "1920x1080")]
+    size: String,
+    /// frame rate (panel runs at 100 Hz; lowered to the source refresh if that is lower)
+    #[arg(long, default_value_t = 100)]
+    fps: u32,
+    /// h264 | hevc
+    #[arg(long, default_value = "h264")]
+    codec: String,
+    /// auto (nvenc→vaapi→amf→qsv→x264) | nvenc | vaapi | amf | qsv | x264 | any FFmpeg encoder name
+    #[arg(long, default_value = "auto")]
+    encoder: String,
+    /// VAAPI render node (GPU conversion, VAAPI encode)
+    #[arg(long, default_value = "/dev/dri/renderD128")]
+    vaapi_device: String,
+    /// bitrate, e.g. 20M, 800k
+    #[arg(long, default_value = "20M")]
+    bitrate: String,
+    /// keyframe interval in frames (0 = 2 s)
+    #[arg(long, default_value_t = 0)]
+    gop: u32,
+    /// slices per frame
+    #[arg(long, default_value_t = 4)]
+    slices: u32,
+    /// VBV size in frames of bitrate
+    #[arg(long, default_value_t = 4.0)]
+    vbv_frames: f64,
+    /// encoder preset (default per encoder: nvenc p1, x264 superfast, …)
+    #[arg(long)]
+    preset: Option<String>,
+    /// encoder tune (default: nvenc ull, x264 zerolatency)
+    #[arg(long)]
+    tune: Option<String>,
+    /// encoder profile (default: high for H.264)
+    #[arg(long)]
+    profile: Option<String>,
+    /// gradual intra refresh instead of periodic IDR (nvenc/x264/x265)
+    #[arg(long)]
+    intra_refresh: bool,
+    /// extra encoder AVOption KEY=VALUE (repeatable; overrides defaults)
+    #[arg(long = "enc-opt", value_name = "KEY=VALUE")]
+    enc_opt: Vec<String>,
+    /// stretch instead of letterboxing (black bars, aspect kept)
+    #[arg(long)]
+    no_letterbox: bool,
+    /// scale CPU frames (x11/test/file) with swscale instead of VAAPI
+    #[arg(long)]
+    cpu_scale: bool,
+    /// GPU scaler quality: hq | fast | default
+    #[arg(long, default_value = "hq")]
+    scale_mode: String,
+    /// extra filters appended to the conversion chain (advanced)
+    #[arg(long)]
+    vf: Option<String>,
+    /// head tracking only
+    #[arg(long)]
+    no_video: bool,
+
+    // ---- outputs / diagnostics ----
+    /// send pose to opentrack 'UDP over network' input ('' = off)
+    #[arg(long, default_value = "127.0.0.1:4242")]
+    opentrack: String,
+    #[arg(long)]
+    print_pose: bool,
+    /// show the exact encoded stream in an ffplay window at X,Y
+    #[arg(long, num_args = 0..=1, default_missing_value = "0,160", value_name = "X,Y")]
+    preview: Option<String>,
+    /// also write the Annex-B stream to FILE
+    #[arg(long)]
+    dump: Option<PathBuf>,
+    /// stop after N frames
+    #[arg(long)]
+    frames: Option<u64>,
+    /// stop after S seconds
+    #[arg(long)]
+    duration: Option<f64>,
+    /// stats interval in seconds
+    #[arg(long, default_value_t = 3.0)]
+    stats_interval: f64,
+    /// FFmpeg log level (quiet, error, warning, info, verbose, debug)
+    #[arg(long, default_value = "warning")]
+    ffmpeg_log: String,
+}
+
+fn parse_rate(s: &str) -> Result<u64, String> {
+    let (n, mul) = match s.chars().last().map(|c| c.to_ascii_lowercase()) {
+        Some('k') => (&s[..s.len() - 1], 1e3),
+        Some('m') => (&s[..s.len() - 1], 1e6),
+        _ => (s, 1.0),
+    };
+    n.parse::<f64>().map(|v| (v * mul) as u64).map_err(|_| format!("bad rate {s}"))
+}
+
+fn parse_size(s: &str) -> Result<(u32, u32), String> {
+    let (w, h) = s.split_once('x').ok_or_else(|| format!("bad size {s} (WxH)"))?;
+    Ok((w.parse().map_err(|_| "bad width")?, h.parse().map_err(|_| "bad height")?))
+}
+
+#[allow(dead_code)]
+fn parse_region(s: &str) -> Result<(u32, u32, i32, i32), String> {
+    let mut it = s.split('+');
+    let (w, h) = parse_size(it.next().unwrap_or(""))?;
+    let x = it.next().unwrap_or("0").parse().map_err(|_| "bad region x")?;
+    let y = it.next().unwrap_or("0").parse().map_err(|_| "bad region y")?;
+    Ok((w, h, x, y))
+}
+
+fn log_fn() -> LogFn {
+    Arc::new(|s: String| eprintln!("[eyepiece-pc] {s}"))
+}
+
+fn ffmpeg_level(s: &str) -> i32 {
+    match s {
+        "quiet" => -8,
+        "panic" => 0,
+        "fatal" => 8,
+        "error" => 16,
+        "warning" => 24,
+        "info" => 32,
+        "verbose" => 40,
+        "debug" => 48,
+        _ => 24,
+    }
+}
+
+fn build_source(a: &Args) -> Result<SourceKind, String> {
+    Ok(match a.source.as_str() {
+        #[cfg(target_os = "linux")]
+        "kms" => SourceKind::Kms {
+            device: a.kms_device.clone(),
+            plane: a.kms_plane,
+            output: a.output.clone(),
+            simulate: a.kms_simulate,
+        },
+        #[cfg(all(target_os = "linux", feature = "x11"))]
+        "x11" => SourceKind::X11 {
+            display: a.display.clone(),
+            region: a.region.as_deref().map(parse_region).transpose()?,
+            vblank_device: a.kms_device.clone(),
+        },
+        #[cfg(all(target_os = "linux", feature = "pipewire"))]
+        "pipewire" => SourceKind::PipeWire { restore_token_file: a.restore_token.clone(), cursor: a.cursor },
+        #[cfg(windows)]
+        "dxgi" => {
+            let (ad, out) = a.dxgi.split_once(',').unwrap_or(("0", "0"));
+            SourceKind::Dxgi { adapter: ad.parse().unwrap_or(0), output: out.parse().unwrap_or(0) }
+        }
+        "test" => SourceKind::Test { lavfi: a.lavfi.clone() },
+        "file" => SourceKind::File { path: a.input.clone().ok_or("--source file needs --input FILE")? },
+        s => return Err(format!("source {s} not available in this build (kms|pipewire|x11|test|file|dxgi; pipewire needs --features pipewire)")),
+    })
+}
+
+fn main() {
+    let a = Args::parse();
+    let log = log_fn();
+    if let Err(e) = real_main(a, log.clone()) {
+        log(format!("error: {e}"));
+        std::process::exit(1);
+    }
+}
+
+/// The binary may carry CAP_SYS_ADMIN (file capability, for KMS capture). Keep it only
+/// while it is needed: every non-KMS run drops it at once, and KMS runs refuse inputs that
+/// could load foreign code (--vf can name plugin filters such as frei0r).
+#[cfg(target_os = "linux")]
+fn limit_privileges(a: &Args) -> Result<(), String> {
+    #[repr(C)]
+    struct Hdr {
+        version: u32,
+        pid: i32,
+    }
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct Data {
+        effective: u32,
+        permitted: u32,
+        inheritable: u32,
+    }
+    const V3: u32 = 0x2008_0522;
+    let mut h = Hdr { version: V3, pid: 0 };
+    let mut d = [Data::default(); 2];
+    let r = unsafe { libc::syscall(libc::SYS_capget, &mut h as *mut Hdr, d.as_mut_ptr()) };
+    let has_caps = r == 0 && (d[0].permitted != 0 || d[1].permitted != 0);
+    if !has_caps {
+        return Ok(());
+    }
+    let kms = a.source == "kms" && !a.kms_simulate && !a.no_video;
+    if kms || a.list {
+        if a.vf.is_some() {
+            return Err("--vf is refused while running with CAP_SYS_ADMIN (it can load plugin code)".into());
+        }
+        return Ok(());
+    }
+    let mut h = Hdr { version: V3, pid: 0 };
+    let z = [Data::default(); 2];
+    let r = unsafe { libc::syscall(libc::SYS_capset, &mut h as *mut Hdr, z.as_ptr()) };
+    if r != 0 {
+        return Err(format!("dropping capabilities failed: {}", std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+fn real_main(a: Args, log: LogFn) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    limit_privileges(&a)?;
+    eyepiece_av::ffi::set_log_level(ffmpeg_level(&a.ffmpeg_log));
+    #[cfg(target_os = "linux")]
+    if a.list {
+        print!("{}", eyepiece_capture::kms::list(&a.kms_device)?);
+        return Ok(());
+    }
+    let (w, h) = parse_size(&a.size)?;
+    let codec: Codec = a.codec.parse()?;
+    let bitrate = parse_rate(&a.bitrate)?;
+    let sync: SyncMode = a.sync.parse()?;
+    let mut opts = vec![];
+    for kv in &a.enc_opt {
+        let (k, v) = kv.split_once('=').ok_or_else(|| format!("--enc-opt {kv}: want KEY=VALUE"))?;
+        opts.push((k.to_string(), v.to_string()));
+    }
+    let enc = EncoderConfig {
+        codec,
+        encoder: a.encoder.clone(),
+        width: w,
+        height: h,
+        fps: a.fps,
+        bitrate,
+        gop: if a.gop > 0 { a.gop } else { 2 * a.fps },
+        vbv_frames: a.vbv_frames,
+        slices: a.slices,
+        preset: a.preset.clone(),
+        tune: a.tune.clone(),
+        profile: a.profile.clone(),
+        intra_refresh: a.intra_refresh,
+        opts,
+        vaapi_device: a.vaapi_device.clone(),
+    };
+
+    if !a.no_connect {
+        let adb = Adb::new(a.adb.clone(), a.serial.clone());
+        if a.deploy {
+            let bridge = match &a.bridge {
+                Some(b) => b.clone(),
+                None => find_bridge()?,
+            };
+            adb.deploy(&bridge, &a.bridge_args, &*log)?;
+        } else if !a.no_forward && !adb.bridge_running() {
+            log("no eyepiece_bridge running on the goggles: start Eyepiece from the goggles' menu \
+                 (natartos), or use --deploy"
+                .into());
+        }
+        if !a.no_forward {
+            adb.forward(a.port, a.port)?;
+        }
+    }
+    let link = (!a.no_connect).then(|| LinkOptions {
+        addr: format!("{}:{}", a.host, a.port),
+        connect_timeout: Duration::from_secs(15),
+        opentrack: (!a.opentrack.is_empty()).then(|| a.opentrack.clone()),
+        print_pose: a.print_pose,
+    });
+    let preview = match &a.preview {
+        Some(p) => {
+            let (x, y) = p.split_once(',').unwrap_or((p, "0"));
+            Some((x.parse().unwrap_or(0), y.parse().unwrap_or(0)))
+        }
+        None => None,
+    };
+    let cfg = Config {
+        source: build_source(&a)?,
+        sync,
+        drm_device: a.kms_device.clone(),
+        enc,
+        letterbox: !a.no_letterbox,
+        gpu_scale_cpu_input: !a.cpu_scale,
+        vf: a.vf.clone(),
+        scale_mode: a.scale_mode.clone(),
+        video: !a.no_video,
+        link,
+        reconnect: a.reconnect,
+        stop_bridge: a.stop_bridge,
+        dump: a.dump.clone(),
+        preview,
+        stats_interval: a.stats_interval,
+        max_frames: a.frames,
+        duration_s: a.duration,
+    };
+
+    let ctl = Arc::new(Control::default());
+    {
+        let ctl = ctl.clone();
+        let log = log.clone();
+        // stdin: r = recenter, i = IDR, q = quit (only when interactive)
+        if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            std::thread::spawn(move || {
+                for line in std::io::stdin().lock().lines() {
+                    let Ok(l) = line else { break };
+                    match l.trim() {
+                        "r" => ctl.recenter.store(true, Ordering::Relaxed),
+                        "i" => ctl.idr.store(true, Ordering::Relaxed),
+                        "q" => {
+                            ctl.stop.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                        "" => {}
+                        x => log(format!("unknown key {x:?} (r/i/q)")),
+                    }
+                }
+            });
+        }
+    }
+    #[cfg(unix)]
+    {
+        // Ctrl-C: stop cleanly (sends quit to the bridge with --stop-bridge)
+        static mut CTL: Option<Arc<Control>> = None;
+        extern "C" fn on_sig(_: libc::c_int) {
+            #[allow(static_mut_refs)]
+            if let Some(c) = unsafe { CTL.as_ref() } {
+                if c.stop.swap(true, Ordering::Relaxed) {
+                    std::process::exit(130);
+                }
+            }
+        }
+        unsafe {
+            CTL = Some(ctl.clone());
+            libc::signal(libc::SIGINT, on_sig as *const () as libc::sighandler_t);
+            libc::signal(libc::SIGTERM, on_sig as *const () as libc::sighandler_t);
+        }
+    }
+    let lg = log.clone();
+    let deployed = a.deploy && !a.no_connect;
+    let res = session::run(cfg, ctl, Events { log: log.clone(), stats: Arc::new(move |s| lg(s.line())) });
+    if deployed {
+        // the -1 bridge exits with the session; make sure the MCU attitude stream is off
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        if let Some(l) = Adb::new(a.adb.clone(), a.serial.clone()).mcu_stop_safety() {
+            log(l);
+        }
+    }
+    res
+}

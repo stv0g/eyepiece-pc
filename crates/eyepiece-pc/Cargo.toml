@@ -1,0 +1,22 @@
+[package]
+name = "eyepiece-pc"
+description = "PC side of Eyepiece: stream the PC screen to DJI Goggles 3 over USB (library + CLI)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["x11"]
+x11 = ["eyepiece-capture/x11"]
+pipewire = ["eyepiece-capture/pipewire"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+eyepiece-av = { path = "../eyepiece-av" }
+eyepiece-capture = { path = "../eyepiece-capture", default-features = false }
+eyepiece-link = { path = "../eyepiece-link" }
+
+[[bin]]
+name = "eyepiece-pc"
+path = "src/main.rs"

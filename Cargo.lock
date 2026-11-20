@@ -515,6 +515,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "eyepiece-av"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "eyepiece-capture",
+ "eyepiece-link",
+ "libc",
+ "pkg-config",
+]
+
+[[package]]
+name = "eyepiece-capture"
+version = "0.1.0"
+dependencies = [
+ "ashpd",
+ "eyepiece-link",
+ "libc",
+ "pipewire",
+ "pollster",
+ "windows",
+ "x11rb",
+]
+
+[[package]]
+name = "eyepiece-link"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "eyepiece-pc"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "eyepiece-av",
+ "eyepiece-capture",
+ "eyepiece-link",
+ "libc",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1486,48 +1528,6 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_derive",
-]
-
-[[package]]
-name = "usbvr"
-version = "0.1.0"
-dependencies = [
- "clap",
- "libc",
- "usbvr-av",
- "usbvr-capture",
- "usbvr-link",
-]
-
-[[package]]
-name = "usbvr-av"
-version = "0.1.0"
-dependencies = [
- "bindgen",
- "libc",
- "pkg-config",
- "usbvr-capture",
- "usbvr-link",
-]
-
-[[package]]
-name = "usbvr-capture"
-version = "0.1.0"
-dependencies = [
- "ashpd",
- "libc",
- "pipewire",
- "pollster",
- "usbvr-link",
- "windows",
- "x11rb",
-]
-
-[[package]]
-name = "usbvr-link"
-version = "0.1.0"
-dependencies = [
- "libc",
 ]
 
 [[package]]

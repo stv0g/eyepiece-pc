@@ -1,9 +1,0 @@
-[package]
-name = "usbvr-link"
-description = "usb-vr wire protocol, connection to vr_bridge, clock sync, stats, adb helpers (no FFmpeg)"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[dependencies]
-libc = "0.2"
