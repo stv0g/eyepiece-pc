@@ -23,7 +23,7 @@ pub struct UiPrefs {
 
 impl Default for UiPrefs {
     fn default() -> Self {
-        UiPrefs { simple: true, preview: false, preview_width: 640, preview_fps: 30, preview_keyframes_only: false, pin_window_s: 10.0 }
+        UiPrefs { simple: true, preview: false, preview_width: 640, preview_fps: 50, preview_keyframes_only: false, pin_window_s: 10.0 }
     }
 }
 

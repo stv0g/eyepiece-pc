@@ -228,8 +228,9 @@ Force IDR apply while streaming.
 
 The preview never slows the stream: the encode thread only copies each access unit into a
 small bounded queue (dropped when full, the preview then waits for the next keyframe), and a
-low-priority thread decodes it (2 threads, loop filter off) and converts at most *Max fps*
-frames at the chosen width. *Keyframes only* is the lightest mode. Measured against the
+low-priority thread decodes it (2 threads, loop filter off) and converts every n-th frame
+(about *Max fps*, default 50, evenly spaced) at the chosen width. It is for checking the
+picture, not for judging smoothness or latency. *Keyframes only* is the lightest mode. Measured against the
 protocol test bridge (`eyepiece_bridge_host -N`, test source, 100 fps), capture→send p50 of
 the GUI without preview, and with a 640-wide 30 fps preview, stayed within run-to-run noise
 of the CLI (±0.3 ms); a full-size 100 fps preview with x264 on the same CPU added about

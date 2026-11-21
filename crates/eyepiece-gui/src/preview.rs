@@ -6,7 +6,8 @@
 //! channel with `try_send`. When the preview is off it returns before copying; when the
 //! decoder falls behind, the AU is dropped (never waited for) and the preview skips to the
 //! next keyframe. Decoding is software, at most 2 threads, loop filter skipped, niced on Linux;
-//! frames are decimated to `max_fps` and downscaled to `width` before the UI sees them.
+//! every n-th frame (n from the stream rate: about `max_fps`, evenly spaced) is
+//! downscaled to `width` before the UI sees it.
 
 use eyepiece_pc::av::ffi::*;
 use eyepiece_pc::av::Codec;
@@ -125,7 +126,12 @@ fn decode_loop(
     on_image: Arc<dyn Fn() + Send + Sync>,
 ) {
     lower_priority();
-    let mut last_pub: Option<Instant> = None;
+    // decimation by frame count (every n-th decoded frame, n from the measured AU rate),
+    // not by wall time: a time threshold after a variable decode + convert lands on the 4th
+    // or 5th frame (39–54 ms at 100 fps, max 30) — an uneven, visibly juddering cadence
+    let mut since_pub: Option<u32> = None;
+    let mut last_au: Option<Instant> = None;
+    let mut au_dt = 0.0f64; // EMA of the AU interval, s
     let mut seq = 0u64;
     let mut gap = false;
     let mut dropped_seen = 0;
@@ -140,8 +146,14 @@ fn decode_loop(
             dec.flush();
         }
         let t0 = Instant::now();
-        let fps = knobs.max_fps.load(Ordering::Relaxed).max(1);
-        let due = last_pub.is_none_or(|t| t.elapsed().as_secs_f64() >= 1.0 / fps as f64);
+        if let Some(l) = last_au {
+            let dt = t0.duration_since(l).as_secs_f64().min(1.0);
+            au_dt = if au_dt == 0.0 { dt } else { au_dt + (dt - au_dt) * 0.05 };
+        }
+        last_au = Some(t0);
+        let max_fps = knobs.max_fps.load(Ordering::Relaxed).max(1) as f64;
+        let every = if au_dt > 0.0 { (1.0 / au_dt / max_fps).round().max(1.0) as u32 } else { 1 };
+        let due = since_pub.is_none_or(|n| n + 1 >= every);
         match dec.decode(&au) {
             Ok(Some(f)) => {
                 stats.decoded.fetch_add(1, Ordering::Relaxed);
@@ -153,14 +165,19 @@ fn decode_loop(
                         img.seq = seq;
                         *image.lock().unwrap() = Some(img);
                         stats.shown.fetch_add(1, Ordering::Relaxed);
-                        last_pub = Some(Instant::now());
+                        since_pub = Some(0);
                         on_image();
                     }
+                } else if let Some(n) = since_pub.as_mut() {
+                    *n += 1;
                 }
                 gap = false;
             }
             Ok(None) => {}
-            Err(_) => gap = true,
+            Err(_) => {
+                gap = true;
+                since_pub = None; // show the first good frame after the resync at once
+            }
         }
     }
 }
@@ -252,37 +269,38 @@ fn to_rgba(f: &Frame, out_w: usize) -> Option<Image> {
     let out_w = out_w.min(w);
     let out_h = (h * out_w / w).max(1);
     let mut rgba = vec![0u8; out_w * out_h * 4];
+    // 16.16 fixed point; source columns once per frame
+    let k = |x: f32| (x * 65536.0).round() as i32;
+    let (ky, kc) = if full { (k(1.0), k(1.0)) } else { (k(1.164_383), k(1.138_393)) };
+    let y0 = if full { 0 } else { 16 };
+    let (kr_v, kg_u, kg_v, kb_u) = (k(1.5748), k(0.187_324), k(0.468_124), k(1.8556));
+    let xs: Vec<(usize, usize)> = (0..out_w)
+        .map(|ox| {
+            let sx = ox * w / out_w;
+            (sx, if nv12 { sx & !1 } else { sx / 2 })
+        })
+        .collect();
+    let px = |v: i32| (v >> 16).clamp(0, 255) as u8;
     unsafe {
         let fr = &*f.0;
         let (y_p, y_s) = (fr.data[0], fr.linesize[0] as isize);
         let (u_p, u_s) = (fr.data[1], fr.linesize[1] as isize);
         let (v_p, v_s) = (fr.data[2], fr.linesize[2] as isize);
-        for oy in 0..out_h {
+        for (oy, out) in rgba.chunks_exact_mut(out_w * 4).enumerate() {
             let sy = (oy * h / out_h) as isize;
             let yrow = y_p.offset(sy * y_s);
-            let crow = sy / 2;
-            for ox in 0..out_w {
-                let sx = (ox * w / out_w) as isize;
-                let yv = *yrow.offset(sx) as f32;
-                let (u, v) = if nv12 {
-                    let c = u_p.offset(crow * u_s + (sx & !1));
-                    (*c as f32, *c.offset(1) as f32)
-                } else {
-                    (*u_p.offset(crow * u_s + sx / 2) as f32, *v_p.offset(crow * v_s + sx / 2) as f32)
-                };
-                let (yy, cb, cr) = if full {
-                    (yv, u - 128.0, v - 128.0)
-                } else {
-                    ((yv - 16.0) * 1.164_383, (u - 128.0) * 1.138_393, (v - 128.0) * 1.138_393)
-                };
-                let r = yy + 1.5748 * cr;
-                let g = yy - 0.187_324 * cb - 0.468_124 * cr;
-                let b = yy + 1.8556 * cb;
-                let o = (oy * out_w + ox) * 4;
-                rgba[o] = r.clamp(0.0, 255.0) as u8;
-                rgba[o + 1] = g.clamp(0.0, 255.0) as u8;
-                rgba[o + 2] = b.clamp(0.0, 255.0) as u8;
-                rgba[o + 3] = 255;
+            let urow = u_p.offset(sy / 2 * u_s);
+            let vrow = v_p.offset(sy / 2 * v_s);
+            for (o, &(sx, cx)) in out.chunks_exact_mut(4).zip(&xs) {
+                let yv = *yrow.add(sx) as i32;
+                let (u, v) = if nv12 { (*urow.add(cx), *urow.add(cx + 1)) } else { (*urow.add(cx), *vrow.add(cx)) };
+                let yy = (yv - y0) * ky;
+                let cb = (u as i32 - 128) * kc >> 16;
+                let cr = (v as i32 - 128) * kc >> 16;
+                o[0] = px(yy + kr_v * cr);
+                o[1] = px(yy - kg_u * cb - kg_v * cr);
+                o[2] = px(yy + kb_u * cb);
+                o[3] = 255;
             }
         }
     }
