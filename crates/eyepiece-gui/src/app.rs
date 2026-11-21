@@ -871,6 +871,12 @@ impl App {
         section(ui, "Video", |ui| {
             row(ui, "fps", |ui| ui.add(egui::DragValue::new(&mut a.fps).range(1..=240)));
             row(ui, "codec", |ui| combo(ui, "codec", &mut a.codec, &["h264", "hevc"]));
+            row(ui, "stereo 3D", |ui| {
+                ui.checkbox(&mut a.stereo, "--stereo").on_hover_text(
+                    "the source is both eyes side by side (e.g. a VR compositor window); sent as \
+                     2560x720, the goggles switch to their 3D mode (~60 Hz) for the session",
+                )
+            });
             row(ui, "encoder", |ui| ui.text_edit_singleline(&mut a.encoder));
             row(ui, "vaapi device", |ui| ui.text_edit_singleline(&mut a.vaapi_device));
             row(ui, "bitrate", |ui| ui.text_edit_singleline(&mut a.bitrate));

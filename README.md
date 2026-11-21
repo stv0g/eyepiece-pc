@@ -162,6 +162,16 @@ when the PC side is connected, otherwise over `adb forward` and says so:
   unchanged. A reboot of the goggles returns to the stock USB setup. Linux only for now
   (Windows needs an extra USB descriptor, macOS has no RNDIS driver).
 
+### Stereo 3D (experimental)
+
+`--stereo` treats the source as both eyes side by side (left | right) and sends it as
+2560x720; the goggles switch to their 3D display mode for the session (1280x720 per eye,
+~60 Hz — the panel's only 3D mode, as used by the goggles' own 3D video player) and back to
+2D when it ends. `eyepiece-pc --stereo --source test` shows a stereo test pattern (right eye
+mirrored). Needs natartos v0.1.0-eyepiece.5 or newer (or `--bridge` with a current build).
+Feeding it from VR apps (a VR runtime's compositor window as the source, head pose from
+`--head-tracking`) is work in progress.
+
 ## GUI
 
 `eyepiece-gui` runs the same session code as the CLI (same options, same code path), with
