@@ -132,6 +132,17 @@ impl Adb {
             let tail = self.shell(&format!("tail -n 20 {DEVICE_LOG}"), false).unwrap_or_default();
             return Err(format!("eyepiece_bridge did not start:\n{tail}"));
         }
+        // adb forward accepts a TCP connect even when nothing listens on the goggles yet (and
+        // closes it right away), so a connect is no proof: wait for the bridge's own log line.
+        // Startup takes >1 s when the overlay has no fb_gui_hide (1 s wait for its ack).
+        let t_end = std::time::Instant::now() + Duration::from_secs(6);
+        while self.shell(&format!("grep -q 'listening on' {DEVICE_LOG} && echo y"), false).unwrap_or_default().trim() != "y" {
+            if std::time::Instant::now() >= t_end {
+                let tail = self.shell(&format!("tail -n 20 {DEVICE_LOG}"), false).unwrap_or_default();
+                return Err(format!("eyepiece_bridge is not listening:\n{tail}"));
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
         log(format!("eyepiece_bridge running on goggles (pid {pid})"));
         if !self.overlay_loaded() {
             log("WARNING: natartos overlay not detected (hook_overlay.so is not mapped in dji_glasses) — \
