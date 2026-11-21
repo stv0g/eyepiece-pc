@@ -195,6 +195,14 @@ eyepiece-gui --start -- --source test --encoder x264    # eyepiece-pc options af
 eyepiece-gui --config my.toml                       # another settings file
 ```
 
+<p>
+  <img src="docs/screenshots/gui-simple.png" width="300" alt="eyepiece-gui simple view: Start/Stop, status, Show, Quality, head tracking with a small 3D pose, USB network, preview">
+  <img src="docs/screenshots/gui-full.png" width="520" alt="eyepiece-gui full view: left panel with source, bridge, data link, encoder; Overview tab with preview, 3D head pose and latency per stage">
+</p>
+
+*Simple view and full view, streaming the test pattern to a simulated bridge on the PC
+(the latency numbers are illustrative, not a measurement).*
+
 It opens in a **simple view**: a big Start/Stop button, a status line (connected, data link
 USB network or adb, fps, capture→shown latency), notices (e.g. "connect the USB network"),
 and only the main choices:
