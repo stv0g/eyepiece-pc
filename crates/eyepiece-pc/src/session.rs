@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use eyepiece_av::encoder;
@@ -69,11 +69,39 @@ pub struct Control {
     pub stop: AtomicBool,
     pub recenter: AtomicBool,
     pub idr: AtomicBool,
+    /// pending head-tracking change: 0 = none, 1 = off, 2 = on (see [`Control::set_head_tracking`])
+    pub head_tracking: AtomicU8,
 }
+
+impl Control {
+    /// Turn the goggles' head tracking on/off while running; kept across reconnects.
+    pub fn set_head_tracking(&self, on: bool) {
+        self.head_tracking.store(if on { 2 } else { 1 }, Ordering::Relaxed);
+    }
+}
+
+/// Encoded-stream tap: every AU right after it was written to the socket (`key` = IDR).
+/// Runs on the encode/send thread: it must only copy and hand off (bounded, non-blocking).
+pub type AuTap = Arc<dyn Fn(&[u8], bool) + Send + Sync>;
+/// Called with the link on every (re)connect, and with `None` when it is gone.
+pub type LinkFn = Arc<dyn Fn(Option<Arc<Link>>) + Send + Sync>;
 
 pub struct Events {
     pub log: LogFn,
     pub stats: Arc<dyn Fn(&Snapshot) + Send + Sync>,
+    pub au: Option<AuTap>,
+    pub on_link: Option<LinkFn>,
+}
+
+impl Events {
+    pub fn new(log: LogFn, stats: Arc<dyn Fn(&Snapshot) + Send + Sync>) -> Events {
+        Events { log, stats, au: None, on_link: None }
+    }
+    fn link_changed(&self, l: Option<Arc<Link>>) {
+        if let Some(f) = &self.on_link {
+            f(l);
+        }
+    }
 }
 
 fn make_source(cfg: &Config) -> Result<Box<dyn Source>, String> {
@@ -143,6 +171,7 @@ fn connect(cfg: &Config, enc: &EncoderConfig, ev: &Events) -> Result<Option<Arc<
     if cfg.video {
         l.send_stream(PANEL_W as u16, PANEL_H as u16, enc.codec.wire(), enc.fps).map_err(|e| e.to_string())?;
     }
+    ev.link_changed(Some(l.clone()));
     Ok(Some(l))
 }
 
@@ -287,6 +316,7 @@ pub fn run(mut cfg: Config, ctl: Arc<Control>, ev: Events) -> Result<(), String>
     let mut frames_sent = 0u64;
     let t_start = mono_us();
     let mut last_reconnect = 0u64;
+    let mut head_tracking = cfg.link.as_ref().is_some_and(|l| l.head_tracking);
 
     let result: Result<(), String> = (|| {
         loop {
@@ -306,6 +336,7 @@ pub fn run(mut cfg: Config, ctl: Arc<Control>, ev: Events) -> Result<(), String>
             if let Some(l) = &cur {
                 if !l.alive() {
                     *link.lock().unwrap() = None;
+                    ev.link_changed(None);
                     if !cfg.reconnect {
                         return Ok(());
                     }
@@ -315,6 +346,12 @@ pub fn run(mut cfg: Config, ctl: Arc<Control>, ev: Events) -> Result<(), String>
                 if ctl.recenter.swap(false, Ordering::Relaxed) {
                     let _ = l.recenter();
                     log("recenter sent".into());
+                }
+                let ht = ctl.head_tracking.swap(0, Ordering::Relaxed);
+                if ht != 0 && (ht == 2) != head_tracking {
+                    head_tracking = ht == 2;
+                    let _ = l.set_head_tracking(head_tracking);
+                    log(format!("head tracking {}", if head_tracking { "on" } else { "off" }));
                 }
             } else if cfg.link.is_some() {
                 // reconnect loop (only reached with --reconnect); stage A keeps running
@@ -328,6 +365,7 @@ pub fn run(mut cfg: Config, ctl: Arc<Control>, ev: Events) -> Result<(), String>
                 let mut c2 = cfg.clone();
                 if let Some(lo) = c2.link.as_mut() {
                     lo.connect_timeout = Duration::from_millis(500);
+                    lo.head_tracking = head_tracking;
                 }
                 if let Ok(Some(l)) = connect(&c2, &cfg.enc, &ev) {
                     *link.lock().unwrap() = Some(l);
@@ -406,6 +444,9 @@ pub fn run(mut cfg: Config, ctl: Arc<Control>, ev: Events) -> Result<(), String>
                 if let Some(pv) = preview.as_mut() {
                     pv.feed(&p.data);
                 }
+                if let Some(tap) = &ev.au {
+                    tap(&p.data, p.key);
+                }
             }
         }
     })();
@@ -419,6 +460,7 @@ pub fn run(mut cfg: Config, ctl: Arc<Control>, ev: Events) -> Result<(), String>
             let _ = l.quit_bridge();
         }
         l.close();
+        ev.link_changed(None);
     }
     drop(preview);
     drop(enc);
