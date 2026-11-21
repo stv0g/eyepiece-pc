@@ -1,8 +1,9 @@
-//! Eyepiece PC streaming library: everything a frontend (the `eyepiece-pc` CLI, later a UI)
-//! needs. Build a [`session::Config`], call [`session::run`] on a thread, steer it with
-//! [`session::Control`], receive log lines and [`eyepiece_link::stats::Snapshot`]s via
-//! [`session::Events`].
+//! Eyepiece PC streaming library: everything a frontend (the `eyepiece-pc` CLI, `eyepiece-gui`)
+//! needs. Build a [`session::Config`] (or a [`cli::Args`] and [`cli::prepare`] it), call
+//! [`session::run`] on a thread, steer it with [`session::Control`], receive log lines,
+//! [`eyepiece_link::stats::Snapshot`]s, the link and the encoded stream via [`session::Events`].
 
+pub mod cli;
 pub mod preview;
 pub mod session;
 

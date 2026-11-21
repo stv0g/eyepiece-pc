@@ -10,14 +10,17 @@ repository.workspace = true
 default = ["x11"]
 x11 = ["eyepiece-capture/x11"]
 pipewire = ["eyepiece-capture/pipewire"]
+# serde derives on cli::Args (settings files of frontends such as eyepiece-gui)
+serde = ["dep:serde"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
+serde = { version = "1", features = ["derive"], optional = true }
 eyepiece-av = { path = "../eyepiece-av" }
 eyepiece-capture = { path = "../eyepiece-capture", default-features = false }
 eyepiece-link = { path = "../eyepiece-link" }
 
 [[bin]]
 name = "eyepiece-pc"
-path = "src/main.rs"
+path = "src/bin/eyepiece-pc.rs"

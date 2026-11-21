@@ -329,6 +329,7 @@ impl Link {
                 s.dropped = f.dropped;
                 if let Some(o) = off {
                     s.lat.push(f.t_shown_us as i64 - o - f.pts_us as i64);
+                    s.recv.push(f.t_recv_us as i64 - o - f.pts_us as i64);
                 }
             }
             EP_LOG => {

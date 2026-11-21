@@ -1,4 +1,6 @@
-//! eyepiece-pc — stream the PC screen to DJI Goggles 3 over USB and get head tracking back.
+//! eyepiece-pc command line: the options, and how they become a [`Config`] (adb deploy/forward
+//! included). The `eyepiece-pc` binary is [`main`]; other frontends (the GUI) build an [`Args`]
+//! and use [`prepare`] + [`run_prepared`], so every frontend takes the same code path.
 //! Replaces legacy/eyepiece_stream.py (same protocol, same bridge). See README.md.
 
 use clap::Parser;
@@ -7,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
-use eyepiece_pc::session::{self, Config, Control, Events, SourceKind};
+use crate::session::{self, Config, Control, Events, SourceKind};
 use eyepiece_av::{Codec, EncoderConfig};
 use eyepiece_capture::SyncMode;
 use eyepiece_link::adb::Adb;
@@ -40,7 +42,8 @@ fn find_bridge() -> Result<PathBuf, String> {
     ))
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default))]
 #[command(name = "eyepiece-pc", version, about = "Stream the PC screen to DJI Goggles 3 over USB (Eyepiece PC side)",
     after_help = "Keys (stdin): r + Enter = recenter, i + Enter = force IDR, q + Enter = quit.\n\
 Examples:\n  eyepiece-pc                                 # bridge started from the goggles' menu\n  \
@@ -48,174 +51,174 @@ eyepiece-pc --deploy                        # push + start eyepiece_bridge, KMS 
 eyepiece-pc --deploy --output eDP-1 --encoder nvenc --bitrate 30M\n  \
 eyepiece-pc --source test --host 127.0.0.1 --no-forward   # against eyepiece_bridge_host -N\n  \
 eyepiece-pc --list                          # outputs / planes")]
-struct Args {
+pub struct Args {
     // ---- transport ----
     /// adb executable
     #[arg(long, default_value = "adb")]
-    adb: String,
+    pub adb: String,
     /// adb device serial
     #[arg(long)]
-    serial: Option<String>,
+    pub serial: Option<String>,
     /// TCP port (bridge listens on 127.0.0.1:PORT on the goggles)
     #[arg(long, default_value_t = 42420)]
-    port: u16,
+    pub port: u16,
     /// host to connect to (adb forward ends on 127.0.0.1; RNDIS/Wi-Fi: goggles IP + bridge -A)
     #[arg(long, default_value = "127.0.0.1")]
-    host: String,
+    pub host: String,
     /// don't run `adb forward` (host bridge, RNDIS, forward set up elsewhere)
     #[arg(long)]
-    no_forward: bool,
+    pub no_forward: bool,
     /// push the bridge to the goggles and start it (with -1: exits with this session).
     /// Without it, the bridge started from the goggles' menu (natartos Eyepiece mod) is used.
     #[arg(long)]
-    deploy: bool,
+    pub deploy: bool,
     /// eyepiece_bridge binary for --deploy [default: next to this executable, else
     /// $XDG_DATA_HOME/eyepiece/eyepiece_bridge]
     #[arg(long)]
-    bridge: Option<PathBuf>,
+    pub bridge: Option<PathBuf>,
     /// extra eyepiece_bridge args for --deploy (e.g. --bridge-args=-M)
     #[arg(long, default_value = "", allow_hyphen_values = true)]
-    bridge_args: String,
+    pub bridge_args: String,
     /// ask the bridge to exit when we quit
     #[arg(long)]
-    stop_bridge: bool,
+    pub stop_bridge: bool,
     /// keep running when the bridge disconnects and reconnect (IDR on every connect)
     #[arg(long)]
-    reconnect: bool,
+    pub reconnect: bool,
     /// don't connect to a bridge at all (encode only: benchmarks, --dump)
     #[arg(long)]
-    no_connect: bool,
+    pub no_connect: bool,
 
     // ---- source ----
     /// kms | pipewire | x11 | test | file | dxgi
     #[arg(long, default_value = if cfg!(windows) { "dxgi" } else { "kms" })]
-    source: String,
+    pub source: String,
     /// kms: DRM device (the GPU driving the displays)
     #[arg(long, default_value = "/dev/dri/card0")]
-    kms_device: String,
+    pub kms_device: String,
     /// kms: plane id (0 = primary plane of --output / first active screen); see --list
     #[arg(long, default_value_t = 0)]
-    kms_plane: u32,
+    pub kms_plane: u32,
     /// kms: output (connector) name, e.g. eDP-1, DP-2
     #[arg(long)]
-    output: Option<String>,
+    pub output: Option<String>,
     /// capture timing: vblank (PC display refresh, default) | poll (1 ms, takes a new
     /// framebuffer as soon as the compositor commits it) | timer (free-running)
     #[arg(long, default_value = "vblank")]
-    sync: String,
+    pub sync: String,
     /// x11: display (default $DISPLAY)
     #[arg(long)]
-    display: Option<String>,
+    pub display: Option<String>,
     /// x11: region WxH+X+Y (default: whole screen)
     #[arg(long)]
-    region: Option<String>,
+    pub region: Option<String>,
     /// file: media file (looped)
     #[arg(long)]
-    input: Option<String>,
+    pub input: Option<String>,
     /// test: lavfi source graph instead of testsrc2 (e.g. 'smptehdbars=size=1920x1080:rate=100')
     #[arg(long)]
-    lavfi: Option<String>,
+    pub lavfi: Option<String>,
     /// pipewire: file to keep the portal's restore token in (no dialog next time)
     #[arg(long)]
-    restore_token: Option<PathBuf>,
+    pub restore_token: Option<PathBuf>,
     /// pipewire: draw the cursor into the stream
     #[arg(long)]
-    cursor: bool,
+    pub cursor: bool,
     /// dxgi: adapter,output index
     #[arg(long, default_value = "0,0")]
-    dxgi: String,
+    pub dxgi: String,
     /// kms test aid without CAP_SYS_ADMIN: real vblank/flip pacing of the plane, content
     /// from VAAPI test surfaces through the same DMA-BUF path
     #[arg(long, hide = true)]
-    kms_simulate: bool,
+    pub kms_simulate: bool,
     /// list KMS outputs and planes, then exit
     #[arg(long)]
-    list: bool,
+    pub list: bool,
 
     // ---- video ----
     /// frame rate (panel runs at 100 Hz; lowered to the source refresh if that is lower)
     #[arg(long, default_value_t = 100)]
-    fps: u32,
+    pub fps: u32,
     /// h264 | hevc
     #[arg(long, default_value = "h264")]
-    codec: String,
+    pub codec: String,
     /// auto (nvenc→vaapi→amf→qsv→x264) | nvenc | vaapi | amf | qsv | x264 | any FFmpeg encoder name
     #[arg(long, default_value = "auto")]
-    encoder: String,
+    pub encoder: String,
     /// VAAPI render node (GPU conversion, VAAPI encode)
     #[arg(long, default_value = "/dev/dri/renderD128")]
-    vaapi_device: String,
+    pub vaapi_device: String,
     /// bitrate, e.g. 20M, 800k
     #[arg(long, default_value = "20M")]
-    bitrate: String,
+    pub bitrate: String,
     /// keyframe interval in frames (0 = 2 s)
     #[arg(long, default_value_t = 0)]
-    gop: u32,
+    pub gop: u32,
     /// slices per frame
     #[arg(long, default_value_t = 4)]
-    slices: u32,
+    pub slices: u32,
     /// VBV size in frames of bitrate
     #[arg(long, default_value_t = 4.0)]
-    vbv_frames: f64,
+    pub vbv_frames: f64,
     /// encoder preset (default per encoder: nvenc p1, x264 superfast, …)
     #[arg(long)]
-    preset: Option<String>,
+    pub preset: Option<String>,
     /// encoder tune (default: nvenc ull, x264 zerolatency)
     #[arg(long)]
-    tune: Option<String>,
+    pub tune: Option<String>,
     /// encoder profile (default: high for H.264)
     #[arg(long)]
-    profile: Option<String>,
+    pub profile: Option<String>,
     /// gradual intra refresh instead of periodic IDR (nvenc/x264/x265)
     #[arg(long)]
-    intra_refresh: bool,
+    pub intra_refresh: bool,
     /// extra encoder AVOption KEY=VALUE (repeatable; overrides defaults)
     #[arg(long = "enc-opt", value_name = "KEY=VALUE")]
-    enc_opt: Vec<String>,
+    pub enc_opt: Vec<String>,
     /// stretch instead of letterboxing (black bars, aspect kept)
     #[arg(long)]
-    no_letterbox: bool,
+    pub no_letterbox: bool,
     /// scale CPU frames (x11/test/file) with swscale instead of VAAPI
     #[arg(long)]
-    cpu_scale: bool,
+    pub cpu_scale: bool,
     /// GPU scaler quality: hq | fast | default
     #[arg(long, default_value = "hq")]
-    scale_mode: String,
+    pub scale_mode: String,
     /// extra filters appended to the conversion chain (advanced)
     #[arg(long)]
-    vf: Option<String>,
+    pub vf: Option<String>,
     /// head tracking only (implies --head-tracking)
     #[arg(long)]
-    no_video: bool,
+    pub no_video: bool,
     /// turn on the goggles' head tracking (100 Hz pose → opentrack); off by default, the
     /// IMU stream only runs while a PC asks for it. Implied by --no-video and --print-pose
     #[arg(long)]
-    head_tracking: bool,
+    pub head_tracking: bool,
 
     // ---- outputs / diagnostics ----
     /// send pose to opentrack 'UDP over network' input ('' = off)
     #[arg(long, default_value = "127.0.0.1:4242")]
-    opentrack: String,
+    pub opentrack: String,
     #[arg(long)]
-    print_pose: bool,
+    pub print_pose: bool,
     /// show the exact encoded stream in an ffplay window at X,Y
     #[arg(long, num_args = 0..=1, default_missing_value = "0,160", value_name = "X,Y")]
-    preview: Option<String>,
+    pub preview: Option<String>,
     /// also write the Annex-B stream to FILE
     #[arg(long)]
-    dump: Option<PathBuf>,
+    pub dump: Option<PathBuf>,
     /// stop after N frames
     #[arg(long)]
-    frames: Option<u64>,
+    pub frames: Option<u64>,
     /// stop after S seconds
     #[arg(long)]
-    duration: Option<f64>,
+    pub duration: Option<f64>,
     /// stats interval in seconds
     #[arg(long, default_value_t = 3.0)]
-    stats_interval: f64,
+    pub stats_interval: f64,
     /// FFmpeg log level (quiet, error, warning, info, verbose, debug)
     #[arg(long, default_value = "warning")]
-    ffmpeg_log: String,
+    pub ffmpeg_log: String,
 }
 
 fn parse_rate(s: &str) -> Result<u64, String> {
@@ -287,7 +290,8 @@ fn build_source(a: &Args) -> Result<SourceKind, String> {
     })
 }
 
-fn main() {
+/// The `eyepiece-pc` binary.
+pub fn main() {
     let a = Args::parse();
     let log = log_fn();
     if let Err(e) = real_main(a, log.clone()) {
@@ -337,14 +341,32 @@ fn limit_privileges(a: &Args) -> Result<(), String> {
     Ok(())
 }
 
-fn real_main(a: Args, log: LogFn) -> Result<(), String> {
+
+impl Default for Args {
+    /// The CLI defaults (`eyepiece-pc` without options).
+    fn default() -> Args {
+        Args::parse_from(["eyepiece-pc"])
+    }
+}
+
+/// A session ready to run: adb deploy/forward done, options turned into a [`Config`].
+pub struct Prepared {
+    pub cfg: Config,
+    /// the bridge was pushed + started by us (it exits with the session)
+    pub deployed: bool,
+    adb: Adb,
+}
+
+/// Everything before streaming: privileges, --list, option parsing, adb deploy/forward.
+/// `Ok(None)`: nothing to stream (`--list` printed its output).
+pub fn prepare(a: &Args, log: &LogFn) -> Result<Option<Prepared>, String> {
     #[cfg(target_os = "linux")]
-    limit_privileges(&a)?;
+    limit_privileges(a)?;
     eyepiece_av::ffi::set_log_level(ffmpeg_level(&a.ffmpeg_log));
     #[cfg(target_os = "linux")]
     if a.list {
         print!("{}", eyepiece_capture::kms::list(&a.kms_device)?);
-        return Ok(());
+        return Ok(None);
     }
     let codec: Codec = a.codec.parse()?;
     let bitrate = parse_rate(&a.bitrate)?;
@@ -370,14 +392,14 @@ fn real_main(a: Args, log: LogFn) -> Result<(), String> {
         vaapi_device: a.vaapi_device.clone(),
     };
 
+    let adb = Adb::new(a.adb.clone(), a.serial.clone());
     if !a.no_connect {
-        let adb = Adb::new(a.adb.clone(), a.serial.clone());
         if a.deploy {
             let bridge = match &a.bridge {
                 Some(b) => b.clone(),
                 None => find_bridge()?,
             };
-            adb.deploy(&bridge, &a.bridge_args, &*log)?;
+            adb.deploy(&bridge, &a.bridge_args, &**log)?;
         } else if !a.no_forward && !adb.bridge_running() {
             log("no eyepiece_bridge running on the goggles: start Eyepiece from the goggles' menu \
                  (natartos), or use --deploy"
@@ -402,7 +424,7 @@ fn real_main(a: Args, log: LogFn) -> Result<(), String> {
         None => None,
     };
     let cfg = Config {
-        source: build_source(&a)?,
+        source: build_source(a)?,
         sync,
         drm_device: a.kms_device.clone(),
         enc,
@@ -420,6 +442,25 @@ fn real_main(a: Args, log: LogFn) -> Result<(), String> {
         max_frames: a.frames,
         duration_s: a.duration,
     };
+    Ok(Some(Prepared { cfg, deployed: a.deploy && !a.no_connect, adb }))
+}
+
+/// Run the session (blocks until it ends), then the post-session safety step of `--deploy`.
+pub fn run_prepared(p: Prepared, ctl: Arc<Control>, ev: Events) -> Result<(), String> {
+    let log = ev.log.clone();
+    let res = session::run(p.cfg, ctl, ev);
+    if p.deployed {
+        // the -1 bridge exits with the session; make sure the MCU attitude stream is off
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        if let Some(l) = p.adb.mcu_stop_safety() {
+            log(l);
+        }
+    }
+    res
+}
+
+fn real_main(a: Args, log: LogFn) -> Result<(), String> {
+    let Some(prepared) = prepare(&a, &log)? else { return Ok(()) };
 
     let ctl = Arc::new(Control::default());
     {
@@ -463,14 +504,5 @@ fn real_main(a: Args, log: LogFn) -> Result<(), String> {
         }
     }
     let lg = log.clone();
-    let deployed = a.deploy && !a.no_connect;
-    let res = session::run(cfg, ctl, Events { log: log.clone(), stats: Arc::new(move |s| lg(s.line())) });
-    if deployed {
-        // the -1 bridge exits with the session; make sure the MCU attitude stream is off
-        std::thread::sleep(std::time::Duration::from_secs(3));
-        if let Some(l) = Adb::new(a.adb.clone(), a.serial.clone()).mcu_stop_safety() {
-            log(l);
-        }
-    }
-    res
+    run_prepared(prepared, ctl, Events::new(log, Arc::new(move |s| lg(s.line()))))
 }

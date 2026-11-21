@@ -15,6 +15,8 @@ pub struct Interval {
     pub shown: u32,
     /// capture→shown µs (clock-synced), per shown frame
     pub lat: Vec<i64>,
+    /// capture→AU fully received on the goggles µs (clock-synced), per shown frame
+    pub recv: Vec<i64>,
     pub dec: Vec<u32>,
     pub cvt: Vec<u32>,
     pub q_max: u32,
@@ -75,6 +77,13 @@ pub struct Snapshot {
     pub pose_hz: f64,
     pub rtt_ms: f64,
     pub yaw_pitch: Option<(f32, f32)>,
+    // p95s and capture→received (not in `line()`; for UIs)
+    pub cap_enc_p95_ms: f64,
+    pub enc_p95_ms: f64,
+    pub dec_p95_ms: f64,
+    pub cvt_p95_ms: f64,
+    pub recv_p50_ms: f64,
+    pub recv_p95_ms: f64,
 }
 
 impl Snapshot {
@@ -100,6 +109,12 @@ impl Snapshot {
             pose_hz: s.poses as f64 / interval_s,
             rtt_ms: rtt_us.map(|r| r as f64 / 1000.0).unwrap_or(f64::NAN),
             yaw_pitch: pose,
+            cap_enc_p95_ms: pct_ms(&s.cap_enc, 0.95),
+            enc_p95_ms: pct_ms(&s.enc, 0.95),
+            dec_p95_ms: pct_ms(&s.dec, 0.95),
+            cvt_p95_ms: pct_ms(&s.cvt, 0.95),
+            recv_p50_ms: pct_i64(&s.recv, 0.5),
+            recv_p95_ms: pct_i64(&s.recv, 0.95),
         }
     }
 
