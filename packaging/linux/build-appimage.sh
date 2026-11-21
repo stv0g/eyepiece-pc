@@ -3,7 +3,7 @@
 #
 #   packaging/linux/build-appimage.sh [--features pipewire]
 #
-# Portable build (what CI does): on an old base (Ubuntu 22.04, glibc 2.35) build FFmpeg with
+# Portable build (what CI does): on an older base (Ubuntu 24.04, glibc 2.39) build FFmpeg with
 # build-ffmpeg.sh, then
 #   FFMPEG_INCLUDE_DIR=$P/include FFMPEG_LIB_DIR=$P/lib LD_LIBRARY_PATH=$P/lib build-appimage.sh
 # Built against the system FFmpeg instead, the AppImage needs a glibc as new as the build

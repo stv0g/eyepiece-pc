@@ -27,11 +27,11 @@ Download from the GitHub releases page:
 
 - `eyepiece-pc-<version>-linux-x86_64.tar.gz` (`eyepiece-pc` + `eyepiece-gui`) — built on Debian testing against **FFmpeg 9**
   (libavcodec 63). It needs the FFmpeg 9 runtime libraries (`libavcodec63`, `libavfilter12`,
-  `libavformat63`, `libavutil61`) and libdrm; on distributions with another FFmpeg major,
-  build from source. `BUILD-INFO.txt` says whether the PipeWire capture feature is included.
+  `libavformat63`, `libavutil61`), libdrm and libpipewire-0.3; on distributions with another
+  FFmpeg major, build from source.
 - `eyepiece-pc-<version>-linux-x86_64.AppImage` — the GUI (and the CLI: start it through a
-  symlink named `eyepiece-pc`) with FFmpeg 9 bundled, for distributions with glibc 2.35 or
-  newer (Ubuntu 22.04, Debian 12, Fedora 36 and later). No KMS screen capture from the
+  symlink named `eyepiece-pc`) with FFmpeg 9 bundled, for distributions with glibc 2.39 or
+  newer (Ubuntu 24.04, Debian 13, Fedora 40 and later). No KMS screen capture from the
   AppImage (it cannot hold the capability): use PipeWire/X11 capture or the tar.gz.
   NVENC needs NVIDIA driver 530 or newer; AMF and QSV are not included.
 - `eyepiece-pc-<version>-windows-x86_64.zip` (`eyepiece-pc.exe` + `eyepiece-gui.exe`) — includes the FFmpeg DLLs (BtbN shared build).
@@ -54,10 +54,11 @@ Linux (Debian/Ubuntu package names; FFmpeg 9 headers, tested with 9.0.2):
 
 ```sh
 sudo apt install build-essential pkg-config libclang-dev \
-    libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libdrm-dev
+    libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libdrm-dev \
+    libpipewire-0.3-dev libspa-0.2-dev
 cargo build --release                       # → target/release/eyepiece-pc, target/release/eyepiece-gui
 cargo build --release -p eyepiece-pc        # the CLI only
-cargo build --release --features pipewire   # + PipeWire/portal capture (libpipewire-0.3-dev libspa-0.2-dev)
+cargo build --release --no-default-features --features x11   # without PipeWire capture (no libpipewire needed)
 cargo test
 ```
 
@@ -94,7 +95,7 @@ getcap ~/.local/bin/eyepiece-pc          # (libcap2-bin) → cap_sys_admin=ep
 10-bit framebuffers (`AR30`/`AB30`/`XR30`/`XB30`, the KWin 6 default) are imported
 directly. fp16 (`AB48`, HDR on) is not supported. `eyepiece-pc` drops the capability
 immediately for every non-KMS run and refuses `--vf` while it holds it (filters can load
-plugin code). `--source pipewire` (feature) and `--source x11` need no privileges.
+plugin code). `--source pipewire` and `--source x11` need no privileges.
 
 ## Usage
 
@@ -106,7 +107,7 @@ eyepiece-pc                                         # capture the first screen, 
 eyepiece-pc --output eDP-1 --encoder nvenc --bitrate 30M
 eyepiece-pc --head-tracking                         # stream + head tracking to opentrack
 eyepiece-pc --no-video --print-pose                 # head tracking only
-eyepiece-pc --source pipewire --restore-token ~/.config/eyepiece.token   # Wayland portal, no root (feature)
+eyepiece-pc --source pipewire --restore-token ~/.config/eyepiece.token   # Wayland portal, no root
 eyepiece-pc --source test --preview                 # test pattern + local ffplay preview
 eyepiece-pc --source file --input clip.mkv
 eyepiece-pc --deploy                                # push + start eyepiece_bridge yourself instead of the menu
@@ -218,7 +219,7 @@ Crates (`crates/`), so a UI can be put on top of the library:
 | crate | contents |
 |---|---|
 | `eyepiece-link` | protocol, TCP link (writev, no AU copy), receive thread, windowed min-RTT clock sync, IDR requests, opentrack, stats, adb deploy/forward. No FFmpeg. |
-| `eyepiece-capture` | `Capture` trait + backends: `kms` (libdrm, vblank pacing), `x11` (XShm), `portal` (PipeWire, feature), `dxgi` (Windows), `pacer` (refresh decimation). No FFmpeg. |
+| `eyepiece-capture` | `Capture` trait + backends: `kms` (libdrm, vblank pacing), `x11` (XShm), `portal` (PipeWire, default feature `pipewire`), `dxgi` (Windows), `pacer` (refresh decimation). No FFmpeg. |
 | `eyepiece-av` | bindgen FFmpeg bindings, DMA-BUF/CPU → AVFrame wrapping (no copy), GPU converter (libavfilter), encoder presets, Annex-B, test/file sources |
 | `eyepiece-pc` | `session::run(Config, Control, Events)` (library API), `cli` (options → `Config`, adb; shared by both frontends) + the CLI |
 | `eyepiece-gui` | egui/eframe (OpenGL) desktop UI on the `eyepiece-pc` library; in-process preview decoder |
@@ -253,7 +254,7 @@ End to end with KMS capture, capture→shown on the goggles is about 13–14 ms 
 | NVENC / VAAPI / x264 | tested |
 | AMF / QSV / HEVC | wired up, untested (HEVC is not decoded by the bridge's tested path) |
 | X11 (XShm) | tested; slow for very large roots (use `--region`) |
-| PipeWire portal (`--features pipewire`) | compiles, not run |
+| PipeWire portal (default feature `pipewire`, Linux) | builds, not yet run against the goggles |
 | Windows DXGI | builds in CI, **never run**; CPU copy via staging texture |
 | GUI (`eyepiece-gui`) | new; run against the protocol test bridge on Linux, not yet with the goggles; Windows untested |
 
@@ -264,8 +265,8 @@ End to end with KMS capture, capture→shown on the goggles is about 13–14 ms 
 [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy); without it the script stops after
 assembling the AppDir. For a portable AppImage, build FFmpeg on an old base first with
 `packaging/linux/build-ffmpeg.sh PREFIX` and point `FFMPEG_INCLUDE_DIR`, `FFMPEG_LIB_DIR` and
-`LD_LIBRARY_PATH` at it (this is what CI does on Ubuntu 22.04). `packaging/linux/build-appimage-docker.sh` runs
-exactly that in an `ubuntu:22.04` container (needs only docker or podman). It bundles the FFmpeg libraries but takes glibc, the GPU driver
+`LD_LIBRARY_PATH` at it (this is what CI does on Ubuntu 24.04). `packaging/linux/build-appimage-docker.sh` runs
+exactly that in an `ubuntu:24.04` container (needs only docker or podman). It bundles the FFmpeg libraries but takes glibc, the GPU driver
 stack (libva, libvdpau, NVIDIA/CUDA, OpenCL, Vulkan, GL), libdrm, PipeWire and the windowing
 libraries from the host. An AppImage cannot carry file capabilities, so KMS capture does not
 work from it (use PipeWire or X11 capture, or a native install with `setcap`).

@@ -37,23 +37,15 @@ jobs:
         run: cargo test --release --locked
       - name: Clippy
         run: cargo clippy --release --locked --all-targets
-      # PipeWire/portal capture: compiles locally only with the -dev packages, never run.
-      # If it builds, it becomes the Linux release binary.
-      - name: Build with PipeWire (optional)
-        id: pipewire
-        continue-on-error: true
-        run: cargo build --release --locked --features pipewire --target-dir target/pw
+      - name: Build without PipeWire (feature check)
+        run: cargo check --release --locked --no-default-features --features x11 --target-dir target/nopw
       - name: Package
         shell: bash
         run: |
           case "$GITHUB_REF" in refs/tags/*) ver="$GITHUB_REF_NAME" ;; *) ver="${GITHUB_SHA::7}" ;; esac
           name="eyepiece-pc-$ver-linux-x86_64"
           mkdir -p "dist/$name"
-          if [ "${{ steps.pipewire.outcome }}" = success ]; then
-            bin=target/pw/release; feat="x11,kms,pipewire"
-          else
-            bin=target/release; feat="x11,kms"
-          fi
+          bin=target/release; feat="x11,kms,pipewire"
           cp "$bin/eyepiece-pc" "$bin/eyepiece-gui" "dist/$name/"
           cp packaging/linux/eyepiece-gui.desktop packaging/linux/eyepiece-gui.svg "dist/$name/"
           echo "eyepiece-pc $ver, features: $feat, built on debian:testing ($(dpkg-query -W -f='${Version}' libavcodec-dev))" > "dist/$name/BUILD-INFO.txt"
@@ -65,12 +57,13 @@ jobs:
           name: linux
           path: dist/*.tar.gz
 
-  # AppImage: built on an old base so it runs on older distributions (glibc 2.35+: Ubuntu
-  # 22.04, Debian 12, Fedora 36 and newer). Ubuntu 22.04 ships FFmpeg 4.4, so FFmpeg 9 is
-  # built from source and bundled. KMS capture does not work from an AppImage (no file
+  # AppImage: built on an older base so it runs on more distributions (glibc 2.39+: Ubuntu
+  # 24.04, Debian 13, Fedora 40 and newer); 24.04 is the oldest base whose PipeWire headers
+  # the pipewire crate accepts. Its FFmpeg is 6.1 (sonames differ from 9, ~150 dependency
+  # libraries), so a minimal FFmpeg 9 is built from source and bundled. KMS capture does not work from an AppImage (no file
   # capabilities): that is what the tar.gz is for.
   appimage:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     env:
       LINUXDEPLOY_VERSION: 1-alpha-20251107-1
     steps:
@@ -78,7 +71,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config clang libclang-dev nasm libx264-dev libva-dev libdrm-dev file
+            build-essential pkg-config clang libclang-dev nasm libx264-dev libva-dev libdrm-dev file \
+            libpipewire-0.3-dev libspa-0.2-dev
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -87,7 +81,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/ffmpeg
-          key: ffmpeg-ubuntu22-${{ hashFiles('packaging/linux/build-ffmpeg.sh') }}
+          key: ffmpeg-ubuntu24-${{ hashFiles('packaging/linux/build-ffmpeg.sh') }}
       - name: Build FFmpeg
         run: |
           [ -f "$RUNNER_TEMP/ffmpeg/lib/libavcodec.so" ] || packaging/linux/build-ffmpeg.sh "$RUNNER_TEMP/ffmpeg"

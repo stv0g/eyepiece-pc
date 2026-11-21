@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["x11"]
+default = ["x11", "pipewire"]
 x11 = ["eyepiece-pc/x11"]
 pipewire = ["eyepiece-pc/pipewire"]
 

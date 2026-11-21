@@ -51,17 +51,32 @@ pub struct App {
     list_outputs_pending: bool,
 }
 
-const SOURCES: &[&str] = &[
-    #[cfg(target_os = "linux")]
-    "kms",
-    #[cfg(all(target_os = "linux", feature = "pipewire"))]
-    "pipewire",
-    #[cfg(all(target_os = "linux", feature = "x11"))]
-    "x11",
-    #[cfg(windows)]
-    "dxgi",
-    "test",
-    "file",
+/// Capture sources: (name, why it is not available in this build, if it isn't).
+const SOURCES: &[(&str, Option<&str>)] = &[
+    ("kms", if cfg!(target_os = "linux") { None } else { Some("Linux only") }),
+    (
+        "pipewire",
+        if !cfg!(target_os = "linux") {
+            Some("Linux only")
+        } else if cfg!(feature = "pipewire") {
+            None
+        } else {
+            Some("not in this build (feature pipewire)")
+        },
+    ),
+    (
+        "x11",
+        if !cfg!(target_os = "linux") {
+            Some("Linux only")
+        } else if cfg!(feature = "x11") {
+            None
+        } else {
+            Some("not in this build (feature x11)")
+        },
+    ),
+    ("dxgi", if cfg!(windows) { None } else { Some("Windows only") }),
+    ("test", None),
+    ("file", None),
 ];
 const ENCODERS: &[&str] = &["auto", "nvenc", "vaapi", "amf", "qsv", "x264"];
 const BITRATES: &[&str] = &["10M", "15M", "20M", "30M", "40M", "50M"];
@@ -348,8 +363,14 @@ impl App {
         egui::Grid::new("main_grid").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
             ui.label("Source");
             egui::ComboBox::from_id_salt("source").selected_text(a.source.as_str()).show_ui(ui, |ui| {
-                for s in SOURCES {
-                    ui.selectable_value(&mut a.source, s.to_string(), *s);
+                for (s, missing) in SOURCES {
+                    let r = ui.add_enabled(missing.is_none(), egui::Button::selectable(a.source == *s, *s));
+                    if r.clicked() {
+                        a.source = s.to_string();
+                    }
+                    if let Some(why) = missing {
+                        r.on_disabled_hover_text(*why);
+                    }
                 }
             });
             ui.end_row();
