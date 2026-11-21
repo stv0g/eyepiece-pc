@@ -143,6 +143,22 @@ busy, `idr` = forced IDRs.
 Environment: `EYEPIECE_FILTER_DOWNLOAD=1` forces the libavfilter `hwdownload` path in the
 converter (debugging).
 
+### USB network (lower latency than adb)
+
+A current `eyepiece_bridge` switches the goggles' USB once per boot to a USB network
+(RNDIS) next to adb and hands out an address by DHCP (goggles `192.168.60.2`, PC
+`192.168.60.1`; no default route, no DNS). `--transport auto` (default) streams over it
+when the PC side is connected, otherwise over `adb forward` and says so:
+
+- Connect the new wired network once in your network settings (automatic/DHCP, no
+  special options). The goggles' MAC is fixed, so it is always the same interface
+  (`enx026579650001`) and a saved connection keeps working.
+- Measured: capture→shown p50 about 11 ms instead of 13–15 ms with adb, link round
+  trip 0.2 ms instead of 2–5 ms, steadier head-pose delivery.
+- `--transport adb` forces the old path; the bridge's `-U adb` leaves the goggles' USB
+  unchanged. A reboot of the goggles returns to the stock USB setup. Linux only for now
+  (Windows needs an extra USB descriptor, macOS has no RNDIS driver).
+
 ## GUI
 
 `eyepiece-gui` runs the same session code as the CLI (same options, same code path), with
