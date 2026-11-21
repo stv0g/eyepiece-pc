@@ -58,10 +58,12 @@ pub struct Args {
     /// host to connect to (adb forward ends on 127.0.0.1; RNDIS/Wi-Fi: goggles IP + bridge -A)
     #[arg(long, default_value = "127.0.0.1")]
     pub host: String,
-    /// data link: auto (the goggles' USB network when it is connected, else adb forward) |
-    /// usb-net (USB network only) | adb (adb forward only). The bridge switches the goggles'
-    /// USB to network + adb once per boot and hands out an address by DHCP; connect that
-    /// network on the PC once (no special settings) for ~2–4 ms lower latency
+    /// data link: auto (the goggles' USB network when it comes up, else adb forward) |
+    /// usb-net (USB network only) | adb (adb forward only, no USB switch). The bridge
+    /// switches the goggles' USB to network (RNDIS) + adb once per boot and hands out an
+    /// address by DHCP; connect that network on the PC once (no special settings) for
+    /// ~2–4 ms lower latency. Linux finds the interface; other systems check that the
+    /// goggles answer on it
     #[arg(long, default_value = "auto")]
     pub transport: String,
     /// don't run `adb forward` (host bridge, RNDIS, forward set up elsewhere)
@@ -355,7 +357,6 @@ fn limit_privileges(a: &Args) -> Result<(), String> {
 /// Where to connect: the goggles' USB network if usable (see `--transport`), else the
 /// `adb forward` end (`--host`, 127.0.0.1).
 fn pick_host(a: &Args, log: &dyn Fn(String)) -> Result<String, String> {
-    use eyepiece_link::net;
     let mode = a.transport.as_str();
     match mode {
         "auto" | "usb-net" | "adb" => {}
@@ -364,8 +365,16 @@ fn pick_host(a: &Args, log: &dyn Fn(String)) -> Result<String, String> {
     if mode == "adb" || a.host != "127.0.0.1" {
         return Ok(a.host.clone()); // explicit --host (host bridge, Wi-Fi, …) wins
     }
+    pick_usb_net(a, mode == "usb-net", log)
+}
+
+/// Linux: find the goggles' RNDIS interface in sysfs and check that it has its address, so
+/// a present but unconfigured interface gets a "connect the network" notice.
+#[cfg(target_os = "linux")]
+fn pick_usb_net(a: &Args, strict: bool, log: &dyn Fn(String)) -> Result<String, String> {
+    use eyepiece_link::net;
     // right after the bridge's USB switch the interface appears and DHCP needs a moment
-    let wait = Duration::from_secs(if mode == "usb-net" { 15 } else { 4 });
+    let wait = Duration::from_secs(if strict { 15 } else { 4 });
     match net::wait_usb_net(wait) {
         Some(n) if n.configured => {
             log(format!("data link: goggles' USB network ({} → {})", n.ifname, net::GOGGLES_ADDR));
@@ -378,20 +387,45 @@ fn pick_host(a: &Args, log: &dyn Fn(String)) -> Result<String, String> {
                  address) for ~2–4 ms lower latency",
                 n.ifname
             );
-            if mode == "usb-net" {
+            if strict {
                 return Err(msg);
             }
             log(format!("NOTICE: {msg}. Using adb meanwhile."));
             Ok(a.host.clone())
         }
-        None if mode == "usb-net" => Err("the goggles' USB network was not found on this PC \
-            (bridge started without it, an older bridge, or not Linux)"
+        None if strict => Err("the goggles' USB network was not found on this PC \
+            (bridge started without it, or an older bridge)"
             .into()),
         None => {
             log("data link: adb forward (no USB network from the goggles)".into());
             Ok(a.host.clone())
         }
     }
+}
+
+/// Windows, macOS, …: no interface lookup; the goggles must answer on their address
+/// (driver bound, DHCP done). Untested on these systems.
+#[cfg(not(target_os = "linux"))]
+fn pick_usb_net(a: &Args, strict: bool, log: &dyn Fn(String)) -> Result<String, String> {
+    use eyepiece_link::net;
+    let wait = Duration::from_secs(if strict { 20 } else { 6 });
+    if net::wait_goggles_reachable(wait) {
+        log(format!("data link: goggles' USB network ({})", net::GOGGLES_ADDR));
+        return Ok(net::GOGGLES_ADDR.into());
+    }
+    let why = if cfg!(target_os = "macos") {
+        "macOS has no built-in driver for it (RNDIS)"
+    } else if cfg!(windows) {
+        "Windows needs its RNDIS driver bound to the goggles' network interface (Device Manager)"
+    } else {
+        "the PC needs an RNDIS driver and DHCP on it"
+    };
+    let msg = format!("the goggles' USB network did not come up on this PC ({why})");
+    if strict {
+        return Err(msg);
+    }
+    log(format!("NOTICE: {msg}. Using adb. Turn off \"USB network\" (--transport adb) to skip this check."));
+    Ok(a.host.clone())
 }
 
 impl Default for Args {

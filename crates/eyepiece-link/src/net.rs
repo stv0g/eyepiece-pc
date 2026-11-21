@@ -2,13 +2,15 @@
 //!
 //! The bridge switches the goggles' USB to RNDIS + adb once per boot and serves DHCP on it
 //! (192.168.60.2 = goggles, 192.168.60.1 = PC; no router, no DNS). Bringing the PC side up
-//! is left to the user's network setup (NetworkManager, systemd-networkd, …): we only find
-//! the interface and check whether it has an address.
+//! is left to the user's network setup (NetworkManager, systemd-networkd, …): on Linux we
+//! find the interface and check whether it has an address; on every OS
+//! [`goggles_reachable`] checks that the goggles answer on it.
 
 /// The goggles' address on their USB network.
 pub const GOGGLES_ADDR: &str = "192.168.60.2";
 
 /// DJI's USB vendor id.
+#[cfg(target_os = "linux")]
 const DJI_VID: &str = "2ca3";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,6 +89,38 @@ pub fn wait_usb_net(timeout: std::time::Duration) -> Option<UsbNet> {
         let n = find_usb_net();
         if matches!(n, Some(UsbNet { configured: true, .. })) || t0.elapsed() >= timeout {
             return n;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
+/// Port for [`goggles_reachable`]: nothing listens on it on the goggles (TCP discard).
+const PROBE_PORT: u16 = 9;
+
+/// Do the goggles answer on their USB network? A TCP connect to a port nothing listens on:
+/// a refusal (RST) proves the goggles' network stack answered. Never the bridge port: a
+/// session bridge (`-1`) exits after its first client disconnects. OS-independent (no
+/// interface lookup), so it works where [`find_usb_net`] cannot look (Windows, macOS).
+pub fn goggles_reachable(timeout: std::time::Duration) -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    let addr: SocketAddr = format!("{GOGGLES_ADDR}:{PROBE_PORT}").parse().expect("static address");
+    match TcpStream::connect_timeout(&addr, timeout) {
+        Ok(_) => true, // something listens there after all: reachable too
+        Err(e) => e.kind() == std::io::ErrorKind::ConnectionRefused,
+    }
+}
+
+/// Retry [`goggles_reachable`] for up to `timeout` (the PC side needs a moment after the
+/// bridge's USB switch: driver bind + DHCP).
+pub fn wait_goggles_reachable(timeout: std::time::Duration) -> bool {
+    let t0 = std::time::Instant::now();
+    loop {
+        // Windows answers a refused connect only after its SYN retries (~1 s)
+        if goggles_reachable(std::time::Duration::from_millis(1500)) {
+            return true;
+        }
+        if t0.elapsed() >= timeout {
+            return false;
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
     }

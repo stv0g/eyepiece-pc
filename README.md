@@ -158,9 +158,17 @@ when the PC side is connected, otherwise over `adb forward` and says so:
   (`enx026579650001`) and a saved connection keeps working.
 - Measured: capture→shown p50 about 11 ms instead of 13–15 ms with adb, link round
   trip 0.2 ms instead of 2–5 ms, steadier head-pose delivery.
-- `--transport adb` forces the old path; the bridge's `-U adb` leaves the goggles' USB
-  unchanged. A reboot of the goggles returns to the stock USB setup. Linux only for now
-  (Windows needs an extra USB descriptor, macOS has no RNDIS driver).
+- `--transport adb` (GUI: *USB network* off) forces the old path and does not switch the
+  goggles' USB at all. A reboot of the goggles returns to the stock USB setup.
+- The switch is requested on every OS. Linux finds the goggles' interface itself (and
+  tells you when it is there but not connected); on other systems the PC checks for a few
+  seconds whether the goggles answer at `192.168.60.2` and otherwise falls back to adb
+  with a notice.
+- **Windows: untested.** Windows' built-in RNDIS driver has to bind to the goggles'
+  network interface (a goggles-side update adds the USB descriptors Windows looks for);
+  then the network gets its address by DHCP like on Linux.
+- **macOS: untested, expected to fall back to adb**: macOS has no built-in RNDIS driver.
+  Turn *USB network* off there to skip the few seconds of checking.
 
 ### Stereo 3D (experimental)
 
