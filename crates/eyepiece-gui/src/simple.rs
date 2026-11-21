@@ -219,15 +219,37 @@ impl App {
                                 e.ctl.recenter.store(true, Ordering::Relaxed);
                             }
                         }
-                        if let Some(p) = self
+                    });
+                    ui.end_row();
+                    if self.head_tracking_on() {
+                        // small version of the full view's 3D pose (dimmed without data)
+                        let pose = self
                             .engine
                             .as_ref()
+                            .filter(|_| running)
                             .and_then(|e| e.shared.link.lock().unwrap().clone())
-                            .and_then(|l| *l.shared.last_pose.lock().unwrap())
-                        {
-                            ui.label(RichText::new(format!("yaw {:+.0}°  pitch {:+.0}°  roll {:+.0}°", p.yaw, p.pitch, p.roll)).small().weak());
-                        }
-                    });
+                            .and_then(|l| *l.shared.last_pose.lock().unwrap());
+                        ui.label("");
+                        ui.horizontal_top(|ui| {
+                            let (r, _) = ui.allocate_exact_size(egui::vec2(180.0, 126.0), egui::Sense::hover());
+                            crate::pose::draw(ui, r, pose.map(|p| (p.yaw, p.pitch, p.roll)));
+                            ui.vertical(|ui| {
+                                ui.add_space(30.0);
+                                for (n, v) in [("yaw  ", pose.map(|p| p.yaw)), ("pitch", pose.map(|p| p.pitch)), ("roll ", pose.map(|p| p.roll))] {
+                                    let v = v.map(|v| format!("{v:+6.1}°")).unwrap_or_else(|| "     –".into());
+                                    ui.label(RichText::new(format!("{n} {v}")).monospace().weak());
+                                }
+                            });
+                        });
+                        ui.end_row();
+                    }
+
+                    // ---- data link ----
+                    ui.label(RichText::new("Connection").strong());
+                    let mut on = settings::usb_net(&self.saved.args);
+                    if ui.checkbox(&mut on, "USB network (faster)").on_hover_text(settings::USB_NET_HINT).changed() {
+                        settings::set_usb_net(&mut self.saved.args, on);
+                    }
                     ui.end_row();
 
                     // ---- preview ----

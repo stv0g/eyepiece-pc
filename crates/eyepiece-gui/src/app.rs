@@ -477,6 +477,17 @@ impl App {
                 ui.radio_value(&mut a.no_deploy, true, "use running (goggles menu)");
             });
             ui.end_row();
+            ui.label("Data link").on_hover_text(settings::USB_NET_HINT);
+            ui.horizontal(|ui| {
+                let on = settings::usb_net(a);
+                if ui.radio(on, "USB network (faster)").on_hover_text(settings::USB_NET_HINT).clicked() {
+                    settings::set_usb_net(a, true);
+                }
+                if ui.radio(!on, "adb").on_hover_text("adb forward only; the goggles' USB is left as it is").clicked() {
+                    settings::set_usb_net(a, false);
+                }
+            });
+            ui.end_row();
             ui.label("Encoder");
             egui::ComboBox::from_id_salt("encoder").selected_text(a.encoder.as_str()).show_ui(ui, |ui| {
                 for s in ENCODERS {
@@ -593,7 +604,8 @@ impl App {
             if let Some(img) = p.image.lock().unwrap().take() {
                 if img.seq != self.tex_seq {
                     self.tex_seq = img.seq;
-                    let ci = egui::ColorImage::from_rgba_unmultiplied([img.w, img.h], &img.rgba);
+                    // alpha is always 255: premultiplied = unmultiplied, without the per-pixel pass
+                    let ci = egui::ColorImage::from_rgba_premultiplied([img.w, img.h], &img.rgba);
                     match &mut self.tex {
                         Some(t) => t.set(ci, TextureOptions::LINEAR),
                         None => self.tex = Some(ui.ctx().load_texture("preview", ci, TextureOptions::LINEAR)),
@@ -603,22 +615,34 @@ impl App {
         }
         let w = if full_width { ui.available_width() } else { (ui.available_width() * 0.55).clamp(240.0, 640.0) };
         let size = egui::vec2(w, w * 9.0 / 16.0);
-        match (&self.tex, self.running()) {
-            (Some(t), true) => {
-                ui.add(egui::Image::new(t).fit_to_exact_size(size));
+        let running = self.running();
+        ui.vertical(|ui| {
+            ui.set_width(w);
+            match (&self.tex, running) {
+                (Some(t), true) => {
+                    ui.add(egui::Image::new(t).fit_to_exact_size(size));
+                }
+                _ => {
+                    let (r, p) = ui.allocate_painter(size, egui::Sense::hover());
+                    p.rect_filled(r.rect, 4.0, Color32::from_gray(16));
+                    p.text(
+                        r.rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        if running { "waiting for a keyframe…" } else { "preview (when streaming)" },
+                        egui::FontId::proportional(14.0),
+                        Color32::from_gray(140),
+                    );
+                }
             }
-            _ => {
-                let (r, p) = ui.allocate_painter(size, egui::Sense::hover());
-                p.rect_filled(r.rect, 4.0, Color32::from_gray(16));
-                p.text(
-                    r.rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    if self.running() { "waiting for a keyframe…" } else { "preview (when streaming)" },
-                    egui::FontId::proportional(14.0),
-                    Color32::from_gray(140),
-                );
-            }
-        }
+            ui.label(
+                RichText::new(format!(
+                    "Preview: about {} fps, downscaled, for checking the picture (not latency). The goggles get every frame.",
+                    self.saved.ui.preview_fps
+                ))
+                .small()
+                .weak(),
+            );
+        });
     }
 
     fn pose_view(&mut self, ui: &mut egui::Ui) {

@@ -153,14 +153,26 @@ A current `eyepiece_bridge` switches the goggles' USB once per boot to a USB net
 `192.168.60.1`; no default route, no DNS). `--transport auto` (default) streams over it
 when the PC side is connected, otherwise over `adb forward` and says so:
 
-- Connect the new wired network once in your network settings (automatic/DHCP, no
-  special options). The goggles' MAC is fixed, so it is always the same interface
-  (`enx026579650001`) and a saved connection keeps working.
+- Linux: set up the new wired network once as a **saved connection with "connect
+  automatically"** (IPv4 automatic/DHCP, no special options). The goggles' MAC is fixed,
+  so it is always the same interface (`enx026579650001`) and the saved connection keeps
+  working. The goggles re-enumerate on the first start after every boot, so a one-off
+  connect (e.g. `nmcli device connect`, which saves no profile) is not brought back up;
+  with NetworkManager:
+  `nmcli connection add type ethernet ifname enx026579650001 con-name eyepiece ipv4.method auto ipv6.method ignore connection.autoconnect yes`.
 - Measured: capture→shown p50 about 11 ms instead of 13–15 ms with adb, link round
   trip 0.2 ms instead of 2–5 ms, steadier head-pose delivery.
-- `--transport adb` forces the old path; the bridge's `-U adb` leaves the goggles' USB
-  unchanged. A reboot of the goggles returns to the stock USB setup. Linux only for now
-  (Windows needs an extra USB descriptor, macOS has no RNDIS driver).
+- `--transport adb` (GUI: *USB network* off) forces the old path and does not switch the
+  goggles' USB at all. A reboot of the goggles returns to the stock USB setup.
+- The switch is requested on every OS. Linux finds the goggles' interface itself (and
+  tells you when it is there but not connected); on other systems the PC checks for a few
+  seconds whether the goggles answer at `192.168.60.2` and otherwise falls back to adb
+  with a notice.
+- **Windows: untested.** Windows' built-in RNDIS driver has to bind to the goggles'
+  network interface (a goggles-side update adds the USB descriptors Windows looks for);
+  then the network gets its address by DHCP like on Linux.
+- **macOS: untested, expected to fall back to adb**: macOS has no built-in RNDIS driver.
+  Turn *USB network* off there to skip the few seconds of checking.
 
 ### Stereo 3D (experimental)
 
@@ -183,6 +195,14 @@ eyepiece-gui --start -- --source test --encoder x264    # eyepiece-pc options af
 eyepiece-gui --config my.toml                       # another settings file
 ```
 
+<p>
+  <img src="docs/screenshots/gui-simple.png" width="300" alt="eyepiece-gui simple view: Start/Stop, status, Show, Quality, head tracking with a small 3D pose, USB network, preview">
+  <img src="docs/screenshots/gui-full.png" width="520" alt="eyepiece-gui full view: left panel with source, bridge, data link, encoder; Overview tab with preview, 3D head pose and latency per stage">
+</p>
+
+*Simple view and full view, streaming the test pattern to a simulated bridge on the PC
+(the latency numbers are illustrative, not a measurement).*
+
 It opens in a **simple view**: a big Start/Stop button, a status line (connected, data link
 USB network or adb, fps, capture→shown latency), notices (e.g. "connect the USB network"),
 and only the main choices:
@@ -193,12 +213,17 @@ and only the main choices:
 - **Quality**: *Low latency* (H.264, 20 Mbit/s, the default), *High quality* (H.265,
   30 Mbit/s: sharper, about 1 ms more encode time), *Low bandwidth* (H.265, 8 Mbit/s). They
   set codec and bitrate only; anything else shows as *Custom*.
-- **Head tracking** on/off (to opentrack) and Recenter; **Preview** on/off.
+- **Head tracking** on/off (to opentrack, off by default) and Recenter; while it is on, a
+  small 3D view of the head pose.
+- **Connection**: *USB network (faster)*, on by default (see [USB network](#usb-network-lower-latency-than-adb));
+  off = adb only.
+- **Preview** on/off.
 
 *Full view* switches to everything below (and *Simple view* back); both edit the same
 settings.
 
-- **Left panel**: source and output, bridge (start / use running), encoder, bitrate,
+- **Left panel**: source and output, bridge (start / use running), data link (USB network
+  / adb, the same setting as *Connection* in the simple view), encoder, bitrate,
   fps, Start/Stop, head tracking on/off, Recenter, Force IDR, preview on/off.
 - **Overview**: the preview (the encoded stream decoded in-process: what the goggles get,
   artifacts included), the head pose as a small 3D view with yaw/pitch/roll, and the
@@ -220,8 +245,9 @@ Force IDR apply while streaming.
 
 The preview never slows the stream: the encode thread only copies each access unit into a
 small bounded queue (dropped when full, the preview then waits for the next keyframe), and a
-low-priority thread decodes it (2 threads, loop filter off) and converts at most *Max fps*
-frames at the chosen width. *Keyframes only* is the lightest mode. Measured against the
+low-priority thread decodes it (2 threads, loop filter off) and converts every n-th frame
+(about *Max fps*, default 50, evenly spaced) at the chosen width. It is for checking the
+picture, not for judging smoothness or latency. *Keyframes only* is the lightest mode. Measured against the
 protocol test bridge (`eyepiece_bridge_host -N`, test source, 100 fps), capture→send p50 of
 the GUI without preview, and with a 640-wide 30 fps preview, stayed within run-to-run noise
 of the CLI (±0.3 ms); a full-size 100 fps preview with x264 on the same CPU added about
