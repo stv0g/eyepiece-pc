@@ -145,8 +145,8 @@ pub struct Args {
     /// frame rate (panel runs at 100 Hz; lowered to the source refresh if that is lower)
     #[arg(long, default_value_t = 100)]
     pub fps: u32,
-    /// h264 | hevc
-    #[arg(long, default_value = "h264")]
+    /// h264 | hevc (default: hevc on macOS, VideoToolbox; else h264)
+    #[arg(long, default_value = DEFAULT_CODEC)]
     pub codec: String,
     /// stereo 3D: the source is both eyes side by side (left | right) and is sent as
     /// 2560x720 (1280x720 per eye); the goggles switch to their 3D mode (~60 Hz) for the
@@ -427,6 +427,10 @@ fn pick_usb_net(a: &Args, strict: bool, log: &dyn Fn(String)) -> Result<String, 
     log(format!("NOTICE: {msg}. Using adb. Turn off \"USB network\" (--transport adb) to skip this check."));
     Ok(a.host.clone())
 }
+
+/// HEVC on macOS: VideoToolbox HEVC costs about 0.3 ms more encode than H.264 there but
+/// gives a clearly better picture at the same bitrate.
+pub const DEFAULT_CODEC: &str = if cfg!(target_os = "macos") { "hevc" } else { "h264" };
 
 impl Default for Args {
     /// The CLI defaults (`eyepiece-pc` without options).
