@@ -1052,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "eyepiece-av"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bindgen",
  "eyepiece-capture",
@@ -1063,7 +1063,7 @@ dependencies = [
 
 [[package]]
 name = "eyepiece-capture"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ashpd",
  "eyepiece-link",
@@ -1076,7 +1076,7 @@ dependencies = [
 
 [[package]]
 name = "eyepiece-gui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "directories",
@@ -1089,14 +1089,14 @@ dependencies = [
 
 [[package]]
 name = "eyepiece-link"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "eyepiece-pc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "eyepiece-av",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "eyepiece-xr"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "fastrand"

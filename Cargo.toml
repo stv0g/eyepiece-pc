@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/eyepiece-link", "crates/eyepiece-capture", "crates/eyepiece-av", "crates/eyepiece-pc", "crates/eyepiece-gui", "crates/eyepiece-xr"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/zuim/eyepiece-pc"
