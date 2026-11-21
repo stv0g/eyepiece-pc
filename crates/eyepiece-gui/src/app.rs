@@ -342,6 +342,12 @@ impl App {
                 }
             });
         }
+        if let Some(n) = self.engine.as_ref().and_then(|e| e.shared.notice.lock().unwrap().clone()) {
+            ui.add_space(4.0);
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.label(RichText::new(format!("⚠ {n}")).color(Color32::from_rgb(220, 180, 60)));
+            });
+        }
         ui.add_space(6.0);
 
         let a = &mut self.saved.args;
@@ -753,6 +759,17 @@ impl App {
             row(ui, "adb serial", |ui| opt_text(ui, &mut a.serial, "first device"));
             row(ui, "port", |ui| ui.add(egui::DragValue::new(&mut a.port)));
             row(ui, "host", |ui| ui.text_edit_singleline(&mut a.host));
+            row(ui, "data link", |ui| {
+                egui::ComboBox::from_id_salt("transport").selected_text(a.transport.as_str()).show_ui(ui, |ui| {
+                    for (v, h) in [
+                        ("auto", "goggles' USB network when connected, else adb"),
+                        ("usb-net", "USB network only"),
+                        ("adb", "adb forward only"),
+                    ] {
+                        ui.selectable_value(&mut a.transport, v.to_string(), v).on_hover_text(h);
+                    }
+                })
+            });
             row(ui, "no adb forward", |ui| ui.checkbox(&mut a.no_forward, "--no-forward"));
             row(ui, "deploy bridge", |ui| ui.checkbox(&mut a.deploy, "--deploy"));
             row(ui, "bridge binary", |ui| opt_path(ui, &mut a.bridge, "next to exe / $XDG_DATA_HOME/eyepiece"));
