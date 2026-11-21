@@ -417,8 +417,8 @@ impl App {
             }
             ui.label("Bridge");
             ui.horizontal(|ui| {
-                ui.radio_value(&mut a.deploy, false, "goggles menu");
-                ui.radio_value(&mut a.deploy, true, "deploy");
+                ui.radio_value(&mut a.no_deploy, false, "start (default)");
+                ui.radio_value(&mut a.no_deploy, true, "use running (goggles menu)");
             });
             ui.end_row();
             ui.label("Encoder");
@@ -792,7 +792,7 @@ impl App {
                 })
             });
             row(ui, "no adb forward", |ui| ui.checkbox(&mut a.no_forward, "--no-forward"));
-            row(ui, "deploy bridge", |ui| ui.checkbox(&mut a.deploy, "--deploy"));
+            row(ui, "use running bridge", |ui| ui.checkbox(&mut a.no_deploy, "--no-deploy"));
             row(ui, "bridge binary", |ui| opt_path(ui, &mut a.bridge, "next to exe / $XDG_DATA_HOME/eyepiece"));
             row(ui, "bridge args", |ui| ui.text_edit_singleline(&mut a.bridge_args));
             row(ui, "stop bridge on quit", |ui| ui.checkbox(&mut a.stop_bridge, "--stop-bridge"));

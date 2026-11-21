@@ -113,7 +113,9 @@ impl Adb {
     /// running keeps the goggles black) plus `extra_args`. `bridge` = a local binary to push
     /// first; `None` = use one already on the goggles (pushed earlier, or the one natartos
     /// installed with the Eyepiece mod).
-    pub fn deploy(&self, bridge: Option<&Path>, extra_args: &str, log: &dyn Fn(String)) -> Result<(), String> {
+    /// `usb_net`: ask the bridge to switch the goggles' USB to network + adb (`-U rndis`; only
+    /// bridges that know the option get it).
+    pub fn deploy(&self, bridge: Option<&Path>, extra_args: &str, usb_net: bool, log: &dyn Fn(String)) -> Result<(), String> {
         let exe = match bridge {
             Some(bridge) => {
                 if !bridge.is_file() {
@@ -144,10 +146,19 @@ impl Adb {
                 p
             }
         };
+        let mut args = extra_args.to_string();
+        if usb_net && !args.contains("-U") {
+            let help = self.shell(&format!("{exe} -h 2>&1; true"), false).unwrap_or_default();
+            if help.contains("-U adb|rndis") {
+                args = format!("-U rndis {args}");
+            } else {
+                log("this eyepiece_bridge has no USB network support (older natartos): adb only".into());
+            }
+        }
         self.stop_bridge();
         // a fresh log: the "listening on" wait below must not see an older run's line
         self.shell(&format!("rm -f {DEVICE_LOG}"), false)?;
-        self.shell(&format!("nohup {exe} -1 -b {extra_args} >/dev/null 2>&1 < /dev/null &"), true)?;
+        self.shell(&format!("nohup {exe} -1 -b {args} >/dev/null 2>&1 < /dev/null &"), true)?;
         // adb forward accepts a TCP connect even when nothing listens on the goggles yet (and
         // closes it right away), so a connect is no proof: wait for the bridge's own log line.
         // Startup takes >1 s without fb_gui_hide (overlay ack wait), and a bridge that switches
