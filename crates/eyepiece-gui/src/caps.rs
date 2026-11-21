@@ -43,6 +43,12 @@ mod imp {
         }
     }
 
+    /// KMS capture can work: root, or CAP_SYS_ADMIN (bit 21) permitted.
+    pub fn kms_allowed() -> bool {
+        let root = unsafe { libc::geteuid() } == 0;
+        root || get().is_some_and(|d| d[0].permitted & (1 << 21) != 0)
+    }
+
     /// Calling thread: effective := permitted.
     pub fn raise_effective() {
         if let Some(mut d) = get() {
@@ -58,6 +64,9 @@ mod imp {
 mod imp {
     pub fn lower_effective() {}
     pub fn raise_effective() {}
+    pub fn kms_allowed() -> bool {
+        false
+    }
 }
 
-pub use imp::{lower_effective, raise_effective};
+pub use imp::{kms_allowed, lower_effective, raise_effective};
