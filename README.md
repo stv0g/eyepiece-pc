@@ -95,6 +95,7 @@ Start **Eyepiece** from the goggles' menu (natartos), connect USB, then:
 eyepiece-pc --list                                  # outputs, planes, framebuffer formats
 eyepiece-pc                                         # capture the first screen, best encoder
 eyepiece-pc --output eDP-1 --encoder nvenc --bitrate 30M
+eyepiece-pc --head-tracking                         # stream + head tracking to opentrack
 eyepiece-pc --no-video --print-pose                 # head tracking only
 eyepiece-pc --source pipewire --restore-token ~/.config/eyepiece.token   # Wayland portal, no root (feature)
 eyepiece-pc --source test --preview                 # test pattern + local ffplay preview
@@ -134,9 +135,12 @@ converter (debugging).
 
 ## Head tracking into games
 
-`eyepiece-pc` sends the goggles' yaw/pitch/roll (degrees; +yaw right, +pitch up, +roll right
-ear down) to opentrack's **"UDP over network"** input on `127.0.0.1:4242` by default
-(`--opentrack HOST:PORT`, `--opentrack ''` = off). Head tracking works with `--no-video` too.
+Head tracking is **off by default**: the goggles' IMU stream only runs while a PC asks for it.
+`--head-tracking` turns it on (`--no-video` and `--print-pose` imply it); the bridge stops it
+again when the PC disconnects. `eyepiece-pc` then sends the goggles' yaw/pitch/roll (degrees;
++yaw right, +pitch up, +roll right ear down) to opentrack's **"UDP over network"** input on
+`127.0.0.1:4242` (`--opentrack HOST:PORT`, `--opentrack ''` = off). Needs a bridge from
+natartos `v0.1.0-eyepiece.4` or later (older bridges stream head tracking always).
 
 In opentrack: *Input* = "UDP over network", port 4242. Set a centre key in opentrack, and use
 `r` in eyepiece-pc to recenter the goggles' yaw. Then pick the output for your game:

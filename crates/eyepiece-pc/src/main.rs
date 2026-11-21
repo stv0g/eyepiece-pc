@@ -184,9 +184,13 @@ struct Args {
     /// extra filters appended to the conversion chain (advanced)
     #[arg(long)]
     vf: Option<String>,
-    /// head tracking only
+    /// head tracking only (implies --head-tracking)
     #[arg(long)]
     no_video: bool,
+    /// turn on the goggles' head tracking (100 Hz pose → opentrack); off by default, the
+    /// IMU stream only runs while a PC asks for it. Implied by --no-video and --print-pose
+    #[arg(long)]
+    head_tracking: bool,
 
     // ---- outputs / diagnostics ----
     /// send pose to opentrack 'UDP over network' input ('' = off)
@@ -388,6 +392,7 @@ fn real_main(a: Args, log: LogFn) -> Result<(), String> {
         connect_timeout: Duration::from_secs(15),
         opentrack: (!a.opentrack.is_empty()).then(|| a.opentrack.clone()),
         print_pose: a.print_pose,
+        head_tracking: a.head_tracking || a.no_video || a.print_pose,
     });
     let preview = match &a.preview {
         Some(p) => {

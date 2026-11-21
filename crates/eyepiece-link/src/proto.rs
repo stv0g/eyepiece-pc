@@ -27,6 +27,9 @@ pub const EP_CODEC_H264: u8 = 0;
 pub const EP_CODEC_HEVC: u8 = 1;
 pub const EP_OP_RECENTER: u8 = 1;
 pub const EP_OP_QUIT: u8 = 2;
+/// + u8 on: the bridge starts/stops the goggles' MCU attitude stream (EP_POSE). Off until
+/// asked; the bridge turns it off again when the client disconnects.
+pub const EP_OP_HEADTRACK: u8 = 3;
 
 pub fn header(mtype: u8, flags: u8, len: u32) -> [u8; HDR_LEN] {
     let l = len.to_le_bytes();

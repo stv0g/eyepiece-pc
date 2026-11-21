@@ -21,6 +21,8 @@ pub struct LinkOptions {
     /// opentrack "UDP over network" target, e.g. 127.0.0.1:4242
     pub opentrack: Option<String>,
     pub print_pose: bool,
+    /// ask the bridge for head tracking (EP_POSE) on every (re)connect
+    pub head_tracking: bool,
 }
 
 /// Windowed minimum-RTT clock sync: offset = dev_clock - pc_clock from the ping with the
@@ -144,6 +146,9 @@ impl Link {
             let l = link.clone();
             std::thread::Builder::new().name("ep-ping".into()).spawn(move || l.ping_loop()).unwrap();
         }
+        if o.head_tracking {
+            link.set_head_tracking(true).map_err(|e| e.to_string())?;
+        }
         Ok(link)
     }
 
@@ -192,6 +197,10 @@ impl Link {
     }
     pub fn recenter(&self) -> std::io::Result<()> {
         self.send(EP_CTRL, 0, &[EP_OP_RECENTER])
+    }
+    /// Start/stop the goggles' head-attitude stream (the IMU stream runs only while on).
+    pub fn set_head_tracking(&self, on: bool) -> std::io::Result<()> {
+        self.send(EP_CTRL, 0, &[EP_OP_HEADTRACK, on as u8])
     }
     pub fn quit_bridge(&self) -> std::io::Result<()> {
         self.send(EP_CTRL, 0, &[EP_OP_QUIT])

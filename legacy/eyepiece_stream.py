@@ -38,7 +38,7 @@ EP_CODEC_H264, EP_CODEC_HEVC = 0, 1
 # encoded size, fixed: the goggles have no display scaler and the bridge refuses any other size
 PANEL_W, PANEL_H = 1920, 1080
 PANEL_SIZE = f"{PANEL_W}x{PANEL_H}"
-EP_OP_RECENTER, EP_OP_QUIT = 1, 2
+EP_OP_RECENTER, EP_OP_QUIT, EP_OP_HEADTRACK = 1, 2, 3
 HDR = struct.Struct("<BBBBI")
 START = b"\x00\x00\x00\x01"
 
@@ -568,7 +568,9 @@ def main():
     ap.add_argument("--vbv-frames", type=float, default=4.0,
                     help="encoder VBV size in frames of bitrate (default 4: keyframes get room; USB moves 4 frames in ~1 ms)")
     ap.add_argument("--ffmpeg-extra", default="", help="extra ffmpeg output args")
-    ap.add_argument("--no-video", action="store_true", help="head tracking only")
+    ap.add_argument("--no-video", action="store_true", help="head tracking only (implies --head-tracking)")
+    ap.add_argument("--head-tracking", action="store_true",
+                    help="turn on the goggles' head tracking (off by default; implied by --no-video/--print-pose)")
     ap.add_argument("--opentrack", default="127.0.0.1:4242",
                     help="send pose to opentrack 'UDP over network' input (''=off)")
     ap.add_argument("--print-pose", action="store_true")
@@ -594,6 +596,8 @@ def main():
     link = Link(a)
     link.connect()
     log(f"connected to eyepiece_bridge via 127.0.0.1:{a.port}")
+    if a.head_tracking or a.no_video or a.print_pose:
+        link.send(EP_CTRL, bytes([EP_OP_HEADTRACK, 1]))
     for fn in (link.rx_loop, link.ping_loop, link.stats_loop):
         threading.Thread(target=fn, daemon=True).start()
     if sys.stdin.isatty():
