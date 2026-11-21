@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build the portable AppImage like CI does (Ubuntu 22.04, FFmpeg built from source), inside
+# Build the portable AppImage like CI does (Ubuntu 24.04, FFmpeg built from source), inside
 # a container, so nothing needs to be installed on the host except docker (or podman).
 #
 #   packaging/linux/build-appimage-docker.sh [WORKDIR]
@@ -18,11 +18,12 @@ VERSION="${VERSION:-$(git -C "$ROOT" describe --tags --always 2>/dev/null || ech
 "$DOCKER" run --rm -v "$ROOT:/src:ro" -v "$WORK:/work" \
     -e VERSION="$VERSION" -e LINUXDEPLOY_VERSION="$LINUXDEPLOY_VERSION" \
     -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
-    ubuntu:22.04 sh -euc '
+    ubuntu:24.04 sh -euc '
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends ca-certificates curl git build-essential \
-    pkg-config clang libclang-dev nasm libx264-dev libva-dev libdrm-dev file >/dev/null
+    pkg-config clang libclang-dev nasm libx264-dev libva-dev libdrm-dev file \
+    libpipewire-0.3-dev libspa-0.2-dev >/dev/null
 export CARGO_HOME=/work/rust RUSTUP_HOME=/work/rustup PATH=/work/rust/bin:$PATH
 [ -x /work/rust/bin/cargo ] || curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal
 [ -f /work/ffmpeg/lib/libavcodec.so ] || /src/packaging/linux/build-ffmpeg.sh /work/ffmpeg

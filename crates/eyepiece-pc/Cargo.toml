@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["x11"]
+default = ["x11", "pipewire"]
 x11 = ["eyepiece-capture/x11"]
 pipewire = ["eyepiece-capture/pipewire"]
 # serde derives on cli::Args (settings files of frontends such as eyepiece-gui)
