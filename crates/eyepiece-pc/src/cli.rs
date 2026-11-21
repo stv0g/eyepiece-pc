@@ -146,6 +146,12 @@ pub struct Args {
     /// h264 | hevc
     #[arg(long, default_value = "h264")]
     pub codec: String,
+    /// stereo 3D: the source is both eyes side by side (left | right) and is sent as
+    /// 2560x720 (1280x720 per eye); the goggles switch to their 3D mode (~60 Hz) for the
+    /// session. Use with a side-by-side source (e.g. a VR compositor window); --source test
+    /// shows a stereo test pattern
+    #[arg(long)]
+    pub stereo: bool,
     /// auto (nvenc→vaapi→amf→qsv→x264) | nvenc | vaapi | amf | qsv | x264 | any FFmpeg encoder name
     #[arg(long, default_value = "auto")]
     pub encoder: String,
@@ -422,12 +428,14 @@ pub fn prepare(a: &Args, log: &LogFn) -> Result<Option<Prepared>, String> {
         let (k, v) = kv.split_once('=').ok_or_else(|| format!("--enc-opt {kv}: want KEY=VALUE"))?;
         opts.push((k.to_string(), v.to_string()));
     }
+    // the 3D display timing refreshes at ~60 Hz
+    let fps = if a.stereo { a.fps.min(60) } else { a.fps };
     let enc = EncoderConfig {
         codec,
         encoder: a.encoder.clone(),
-        fps: a.fps,
+        fps,
         bitrate,
-        gop: if a.gop > 0 { a.gop } else { 2 * a.fps },
+        gop: if a.gop > 0 { a.gop } else { 2 * fps },
         vbv_frames: a.vbv_frames,
         slices: a.slices,
         preset: a.preset.clone(),
@@ -485,6 +493,7 @@ pub fn prepare(a: &Args, log: &LogFn) -> Result<Option<Prepared>, String> {
         stats_interval: a.stats_interval,
         max_frames: a.frames,
         duration_s: a.duration,
+        stereo: a.stereo,
     };
     Ok(Some(Prepared { cfg, deployed: !a.no_deploy && !a.no_connect, adb }))
 }
