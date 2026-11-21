@@ -230,6 +230,14 @@ impl App {
                     });
                     ui.end_row();
 
+                    // ---- data link ----
+                    ui.label(RichText::new("Connection").strong());
+                    let mut on = settings::usb_net(&self.saved.args);
+                    if ui.checkbox(&mut on, "USB network (faster)").on_hover_text(settings::USB_NET_HINT).changed() {
+                        settings::set_usb_net(&mut self.saved.args, on);
+                    }
+                    ui.end_row();
+
                     // ---- preview ----
                     ui.label(RichText::new("Preview").strong());
                     ui.checkbox(&mut self.saved.ui.preview, "show what the goggles get");
