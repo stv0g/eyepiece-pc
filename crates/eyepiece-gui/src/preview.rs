@@ -291,12 +291,12 @@ fn to_rgba(f: &Frame, out_w: usize) -> Option<Image> {
             let yrow = y_p.offset(sy * y_s);
             let urow = u_p.offset(sy / 2 * u_s);
             let vrow = v_p.offset(sy / 2 * v_s);
-            for (o, &(sx, cx)) in out.chunks_exact_mut(4).zip(&xs) {
+            for (o, &(sx, cx)) in out.as_chunks_mut::<4>().0.iter_mut().zip(&xs) {
                 let yv = *yrow.add(sx) as i32;
                 let (u, v) = if nv12 { (*urow.add(cx), *urow.add(cx + 1)) } else { (*urow.add(cx), *vrow.add(cx)) };
                 let yy = (yv - y0) * ky;
-                let cb = (u as i32 - 128) * kc >> 16;
-                let cr = (v as i32 - 128) * kc >> 16;
+                let cb = ((u as i32 - 128) * kc) >> 16;
+                let cr = ((v as i32 - 128) * kc) >> 16;
                 o[0] = px(yy + kr_v * cr);
                 o[1] = px(yy - kg_u * cb - kg_v * cr);
                 o[2] = px(yy + kb_u * cb);
