@@ -116,6 +116,11 @@ impl Adb {
     /// `usb_net`: ask the bridge to switch the goggles' USB to network + adb (`-U rndis`; only
     /// bridges that know the option get it).
     pub fn deploy(&self, bridge: Option<&Path>, extra_args: &str, usb_net: bool, log: &dyn Fn(String)) -> Result<(), String> {
+        if self.run(&["get-state"], true).is_err() {
+            return Err("goggles not found over adb: connect them by USB, switch them on and enable \
+                        ADB (toolya adb)"
+                .into());
+        }
         let exe = match bridge {
             Some(bridge) => {
                 if !bridge.is_file() {
