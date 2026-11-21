@@ -36,11 +36,18 @@ Download from the GitHub releases page:
   NVENC needs NVIDIA driver 530 or newer; AMF and QSV are not included.
 - `eyepiece-pc-<version>-windows-x86_64.zip` (`eyepiece-pc.exe` + `eyepiece-gui.exe`) — includes the FFmpeg DLLs (BtbN shared build).
   **The Windows (DXGI capture) path is untested.**
+- `eyepiece-pc-<version>-macos-arm64.dmg` — Apple Silicon app bundle and CLI,
+  with FFmpeg libraries included; requires macOS 15 or newer. The bundle is
+  ad-hoc signed, **not Developer ID signed or notarized**, so Gatekeeper can
+  block it until the user explicitly approves it in System Settings.
 
 You also need `adb` (Android platform-tools) and the goggles running natartos with the
 Eyepiece mod. eyepiece-pc starts the bridge installed with the mod by itself; to use a
 different `eyepiece_bridge` (e.g. a newer natartos release), put it next to the `eyepiece-pc`
 executable or in `~/.local/share/eyepiece/` (`$XDG_DATA_HOME/eyepiece/`), or pass `--bridge`.
+On macOS, Finder-launched apps may not inherit Homebrew's PATH: set the full path
+to `adb` in the GUI's Advanced settings (typically `/opt/homebrew/bin/adb`).
+The optional external `--preview` window also requires `ffplay` on PATH.
 
 Recommended on Linux: install to `~/.local/bin` (see [Permissions](#permissions-linux-kms-capture)).
 
@@ -86,11 +93,12 @@ cargo build --release      # put C:\ffmpeg\bin (the DLLs) on PATH or next to the
 ### macOS
 
 The CLI now has a [ScreenCaptureKit backend](https://github.com/doom-fish/screencapturekit-rs)
-and FFmpeg VideoToolbox encoding. Requires macOS 13+, Xcode (with a macOS SDK and
-Swift compiler, for the capture crate's Swift bridge), current stable Rust and
+and FFmpeg VideoToolbox encoding. Requires macOS 13+, Xcode 26 (with the macOS 26
+SDK and Swift compiler, for the Swift bridges), current stable Rust and
 FFmpeg headers. The lockfile includes Edition 2024 dependencies; Cargo 1.83 is too old.
-This is source-build support, not a signed menu-bar app or an iOS app. No prebuilt
-macOS release is provided yet.
+The CI release is an ad-hoc-signed Apple Silicon app bundle, not a notarized
+menu-bar app or an iOS app. Source builds support macOS 13+; the CI bundle targets
+macOS 15+ because its Homebrew libraries are built on the macOS 15 runner.
 
 The Intel macOS Nix development shell uses Swift 5.10 and the macOS 14 SDK,
 which are too old for the current `apple-metal` dependency.
@@ -110,6 +118,13 @@ Security > Screen & System Audio Recording**, then restart it. Capture is never
 started by unit tests. For an app bundle, include `NSScreenCaptureUsageDescription`
 in its Info.plist and sign the bundle; no entitlement bypasses Screen Recording
 consent. Protected content can be blanked by macOS.
+
+CI builds the DMG with `VERSION=<tag-or-commit> bash packaging/macos/build-dmg.sh`.
+It includes both executables and their non-system linked libraries in the app;
+the CLI is `Eyepiece.app/Contents/MacOS/eyepiece-pc`. CI also records Homebrew
+formula metadata for FFmpeg and its installed dependencies inside the bundle.
+Ad-hoc signing is not Apple notarization; Developer ID signing, notarization,
+and a signed release workflow require separate credentials and configuration.
 
 ScreenCaptureKit is the default source on macOS (`sck` is an alias). The first
 available display is selected unless `--display-id` is provided. Capture uses a
@@ -194,7 +209,7 @@ requested with `--enc-opt constant_bit_rate=1`; unsupported encoders reject it.
 Capture and hardware encoding have been benchmarked on an M4 Pro; **goggles and
 end-to-end display latency remain untested**. See [encoder benchmarks](docs/encoder-benchmarks.md)
 for results and repeatable commands. The macOS
-CI workflow builds the Apple-only code and runs non-capture tests; it does not
+CI job builds the Apple-only code and runs non-capture tests; it does not
 validate TCC permissions, live capture, hardware encoding or end-to-end latency.
 
 ## Permissions (Linux KMS capture)
