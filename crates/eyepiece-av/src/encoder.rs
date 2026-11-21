@@ -108,6 +108,7 @@ pub fn family(name: &str) -> Family {
 pub fn target_for(f: Family) -> Target {
     match f {
         Family::Vaapi => Target::Vaapi,
+        Family::VideoToolbox => Target::VideoToolbox,
         Family::X265 => Target::Yuv420p,
         _ => Target::Nv12,
     }
@@ -320,7 +321,7 @@ fn default_opts(f: Family, c: &EncoderConfig) -> Vec<(String, String)> {
 
 impl Encoder {
     /// Open for frames like `first` (format/size); `hw_frames`: the converter's output
-    /// frames context for VAAPI.
+    /// frames context for VAAPI or VideoToolbox.
     ///
     /// # Safety
     /// `hw_frames` must be null or a valid `AVBufferRef` for the duration of the call
@@ -548,7 +549,7 @@ mod tests {
         assert_eq!(encoder_name("vt", Codec::Hevc), "hevc_videotoolbox");
         assert_eq!(family("h264_videotoolbox"), Family::VideoToolbox);
         assert_eq!(family("hevc_videotoolbox"), Family::VideoToolbox);
-        assert_eq!(target_for(Family::VideoToolbox), Target::Nv12);
+        assert_eq!(target_for(Family::VideoToolbox), Target::VideoToolbox);
         assert_eq!(family("h264_nvenc"), Family::Nvenc);
     }
 

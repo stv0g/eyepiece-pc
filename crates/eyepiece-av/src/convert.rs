@@ -20,6 +20,7 @@ const SWS_THREADS: u32 = 4;
 pub enum Target {
     /// VAAPI surfaces (NV12) for *_vaapi encoders
     Vaapi,
+    VideoToolbox,
     /// system-memory NV12 (nvenc, libx264, amf, qsv)
     Nv12,
     /// system-memory yuv420p (libx265)
@@ -116,8 +117,8 @@ impl Converter {
         match self.cfg.target {
             Target::Vaapi => s,
             // downloaded by `download()` (mapped + streaming-load copy), see below
-            Target::Nv12 if !self.filter_download => s,
-            Target::Nv12 => s + ",hwdownload,format=nv12",
+            Target::Nv12 | Target::VideoToolbox if !self.filter_download => s,
+            Target::Nv12 | Target::VideoToolbox => s + ",hwdownload,format=nv12",
             Target::Yuv420p => s + ",hwdownload,format=nv12,format=yuv420p",
         }
     }
@@ -235,6 +236,16 @@ impl Converter {
 
     /// Convert one frame (consumed). Returns the encoder-ready frame.
     pub fn convert(&mut self, f: Frame) -> Result<Option<Frame>, String> {
+        if f.format() == AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX as i32 {
+            if self.cfg.target != Target::VideoToolbox || self.cfg.extra_vf.is_some()
+                || (f.width() as u32, f.height() as u32) != (self.cfg.width, self.cfg.height)
+            {
+                return Err("Native VideoToolbox surfaces require matching output size, a VideoToolbox encoder, and no --vf; use CPU capture for custom conversion".into());
+            }
+            self.graph = None;
+            self.description = "native NV12 surface passthrough (ScreenCaptureKit handles scaling/letterboxing; no CPU readback)".into();
+            return Ok(Some(f));
+        }
         let key = (f.width(), f.height(), f.format(), hw_key(&f));
         // a new hw frames context (capture recreated it) also needs a new graph; the old
         // one stays referenced by the old buffersrc, so its address can't be reused
@@ -363,5 +374,70 @@ impl Download {
 impl Drop for Download {
     fn drop(&mut self) {
         unsafe { av_buffer_pool_uninit(&mut self.pool) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config() -> ConvertConfig {
+        ConvertConfig {
+            width: 64, height: 32, letterbox: true, target: Target::VideoToolbox,
+            vaapi_device: String::new(), gpu_scale_cpu_input: false,
+            extra_vf: None, scale_mode: "hq".into(),
+        }
+    }
+
+    fn native_frame() -> Frame {
+        let frame = Frame::alloc();
+        unsafe {
+            (*frame.0).width = 64;
+            (*frame.0).height = 32;
+            (*frame.0).format = AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX as i32;
+        }
+        frame
+    }
+
+    #[test]
+    fn native_surface_passes_through_without_a_filter_graph() {
+        let mut converter = Converter::new(config(), 60);
+        let frame = native_frame();
+        let original = frame.0;
+        let result = converter.convert(frame).unwrap().unwrap();
+        assert_eq!(result.0, original);
+        assert!(converter.graph.is_none());
+        assert!(converter.description.contains("no CPU readback"));
+    }
+
+    #[test]
+    fn incompatible_native_conversion_is_rejected() {
+        let mut mismatched = config();
+        mismatched.width = 128;
+        let mut filtered = config();
+        filtered.extra_vf = Some("hflip".into());
+        let mut software = config();
+        software.target = Target::Nv12;
+        for settings in [mismatched, filtered, software] {
+            assert!(Converter::new(settings, 60).convert(native_frame()).is_err());
+        }
+    }
+
+    #[test]
+    fn cpu_input_remains_supported_for_videotoolbox_encoding() {
+        let frame = Frame::alloc();
+        unsafe {
+            (*frame.0).width = 64;
+            (*frame.0).height = 32;
+            (*frame.0).format = AVPixelFormat::AV_PIX_FMT_NV12 as i32;
+            check(av_frame_get_buffer(frame.0, 32), "allocate test frame").unwrap();
+            std::ptr::write_bytes((*frame.0).data[0], 16, (*frame.0).linesize[0] as usize * 32);
+            std::ptr::write_bytes((*frame.0).data[1], 128, (*frame.0).linesize[1] as usize * 16);
+        }
+        let mut converter = Converter::new(config(), 60);
+        let result = converter.convert(frame).unwrap().unwrap();
+        assert_eq!(result.format(), AVPixelFormat::AV_PIX_FMT_NV12 as i32);
+        assert_eq!((result.width(), result.height()), (64, 32));
+        assert!(unsafe { (*result.0).hw_frames_ctx.is_null() });
     }
 }
