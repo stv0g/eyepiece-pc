@@ -39,9 +39,9 @@ fn find_bridge() -> Option<PathBuf> {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default))]
 #[command(name = "eyepiece-pc", version, about = "Stream the PC screen to DJI Goggles 3 over USB (Eyepiece PC side)",
     after_help = "Keys (stdin): r + Enter = recenter, i + Enter = force IDR, q + Enter = quit.\n\
-Examples:\n  eyepiece-pc                                 # bridge started from the goggles' menu\n  \
-eyepiece-pc --deploy                        # push + start eyepiece_bridge, KMS capture of the first screen\n  \
-eyepiece-pc --deploy --output eDP-1 --encoder nvenc --bitrate 30M\n  \
+Examples:\n  eyepiece-pc                                 # start the bridge on the goggles, KMS capture of the first screen\n  \
+eyepiece-pc --output eDP-1 --encoder nvenc --bitrate 30M\n  \
+eyepiece-pc --no-deploy                     # use the bridge started from the goggles' menu\n  \
 eyepiece-pc --source test --host 127.0.0.1 --no-forward   # against eyepiece_bridge_host -N\n  \
 eyepiece-pc --list                          # outputs / planes")]
 pub struct Args {
@@ -67,9 +67,14 @@ pub struct Args {
     /// don't run `adb forward` (host bridge, RNDIS, forward set up elsewhere)
     #[arg(long)]
     pub no_forward: bool,
-    /// push the bridge to the goggles and start it (with -1: exits with this session).
-    /// Without it, the bridge started from the goggles' menu (natartos Eyepiece mod) is used.
+    /// don't start a bridge for this session: use the one already running on the goggles
+    /// (started from their menu). Default: start one (push --bridge / a local
+    /// eyepiece_bridge if there is one, else the bridge installed on the goggles); it
+    /// replaces a bridge started from the menu and exits with this session
     #[arg(long)]
+    pub no_deploy: bool,
+    /// (the default; kept for scripts)
+    #[arg(long, hide = true)]
     pub deploy: bool,
     /// eyepiece_bridge binary for --deploy [default: next to this executable, else
     /// $XDG_DATA_HOME/eyepiece/eyepiece_bridge]
@@ -435,9 +440,9 @@ pub fn prepare(a: &Args, log: &LogFn) -> Result<Option<Prepared>, String> {
 
     let adb = Adb::new(a.adb.clone(), a.serial.clone());
     if !a.no_connect {
-        if a.deploy {
+        if !a.no_deploy {
             let bridge = a.bridge.clone().or_else(find_bridge);
-            adb.deploy(bridge.as_deref(), &a.bridge_args, &**log)?;
+            adb.deploy(bridge.as_deref(), &a.bridge_args, a.transport != "adb", &**log)?;
         } else if !a.no_forward && !adb.bridge_running() {
             log("no eyepiece_bridge running on the goggles: start Eyepiece from the goggles' menu \
                  (natartos), or use --deploy"
@@ -481,7 +486,7 @@ pub fn prepare(a: &Args, log: &LogFn) -> Result<Option<Prepared>, String> {
         max_frames: a.frames,
         duration_s: a.duration,
     };
-    Ok(Some(Prepared { cfg, deployed: a.deploy && !a.no_connect, adb }))
+    Ok(Some(Prepared { cfg, deployed: !a.no_deploy && !a.no_connect, adb }))
 }
 
 /// Run the session (blocks until it ends), then the post-session safety step of `--deploy`.

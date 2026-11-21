@@ -38,8 +38,9 @@ Download from the GitHub releases page:
   **The Windows (DXGI capture) path is untested.**
 
 You also need `adb` (Android platform-tools) and the goggles running natartos with the
-Eyepiece mod. For `--deploy`, put `eyepiece_bridge` from the natartos release next to the
-`eyepiece-pc` executable or in `~/.local/share/eyepiece/` (`$XDG_DATA_HOME/eyepiece/`).
+Eyepiece mod. eyepiece-pc starts the bridge installed with the mod by itself; to use a
+different `eyepiece_bridge` (e.g. a newer natartos release), put it next to the `eyepiece-pc`
+executable or in `~/.local/share/eyepiece/` (`$XDG_DATA_HOME/eyepiece/`), or pass `--bridge`.
 
 Recommended on Linux: install to `~/.local/bin` (see [Permissions](#permissions-linux-kms-capture)).
 
@@ -110,13 +111,15 @@ eyepiece-pc --no-video --print-pose                 # head tracking only
 eyepiece-pc --source pipewire --restore-token ~/.config/eyepiece.token   # Wayland portal, no root
 eyepiece-pc --source test --preview                 # test pattern + local ffplay preview
 eyepiece-pc --source file --input clip.mkv
-eyepiece-pc --deploy                                # push + start eyepiece_bridge yourself instead of the menu
-eyepiece-pc --deploy --bridge-args=-M               # bridge display-timing metrics in its log
+eyepiece-pc --bridge-args=-M                        # bridge display-timing metrics in its log
+eyepiece-pc --no-deploy                             # use the bridge started from the goggles' menu
 ```
 
-Without `--deploy`, the bridge started from the goggles' menu is used. With `--deploy`, the
-bridge is pushed to `/data/local/tmp/eyepiece/` and started with `-1 -b` (it exits with the PC
-session); its log is `/data/local/tmp/eyepiece.log` on the goggles.
+By default eyepiece-pc starts the bridge itself (no need to open Eyepiece in the goggles'
+menu first; a bridge started there is replaced): a local `eyepiece_bridge` / `--bridge` is
+pushed to `/data/local/tmp/eyepiece/`, otherwise the one installed on the goggles is used. It
+runs with `-1 -b` (exits with the PC session); its log is `/data/local/tmp/eyepiece.log` on
+the goggles. `--no-deploy` uses a bridge that is already running.
 
 ### Resolution
 
@@ -170,7 +173,7 @@ eyepiece-gui --start -- --source test --encoder x264    # eyepiece-pc options af
 eyepiece-gui --config my.toml                       # another settings file
 ```
 
-- **Left panel**: source and output, bridge (goggles menu / `--deploy`), encoder, bitrate,
+- **Left panel**: source and output, bridge (start / use running), encoder, bitrate,
   fps, Start/Stop, head tracking on/off, Recenter, Force IDR, preview on/off.
 - **Overview**: the preview (the encoded stream decoded in-process: what the goggles get,
   artifacts included), the head pose as a small 3D view with yaw/pitch/roll, and the
