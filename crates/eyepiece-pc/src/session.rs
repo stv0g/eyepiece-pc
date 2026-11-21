@@ -19,6 +19,11 @@ use eyepiece_link::clock::mono_us;
 use eyepiece_link::stats::{Interval, Snapshot};
 use eyepiece_link::{Link, LinkOptions, LogFn};
 
+/// Encoded size, fixed: the goggles panel. They have no display scaler and the bridge refuses
+/// any other stream size, so every source is scaled (and letterboxed) to this on the PC.
+pub const PANEL_W: u32 = 1920;
+pub const PANEL_H: u32 = 1080;
+
 #[derive(Debug, Clone)]
 pub enum SourceKind {
     #[cfg(target_os = "linux")]
@@ -116,7 +121,7 @@ fn make_source(cfg: &Config) -> Result<Box<dyn Source>, String> {
             Box::new(eyepiece_av::CaptureSource::new(Box::new(d), ""))
         }
         SourceKind::Test { lavfi } => {
-            Box::new(eyepiece_av::TestSource::new(cfg.enc.width, cfg.enc.height, cfg.enc.fps, lavfi.as_deref())?)
+            Box::new(eyepiece_av::TestSource::new(PANEL_W, PANEL_H, cfg.enc.fps, lavfi.as_deref())?)
         }
         SourceKind::File { path } => Box::new(eyepiece_av::FileSource::new(path, cfg.enc.fps)?),
     })
@@ -136,7 +141,7 @@ fn connect(cfg: &Config, enc: &EncoderConfig, ev: &Events) -> Result<Option<Arc<
     let l = Link::connect(lo, ev.log.clone())?;
     (ev.log)(format!("connected to eyepiece_bridge via {}", lo.addr));
     if cfg.video {
-        l.send_stream(enc.width as u16, enc.height as u16, enc.codec.wire(), enc.fps).map_err(|e| e.to_string())?;
+        l.send_stream(PANEL_W as u16, PANEL_H as u16, enc.codec.wire(), enc.fps).map_err(|e| e.to_string())?;
     }
     Ok(Some(l))
 }
@@ -220,8 +225,8 @@ pub fn run(mut cfg: Config, ctl: Arc<Control>, ev: Events) -> Result<(), String>
     };
 
     let convert_cfg = ConvertConfig {
-        width: cfg.enc.width,
-        height: cfg.enc.height,
+        width: PANEL_W,
+        height: PANEL_H,
         letterbox: cfg.letterbox,
         target: encoder::target_for(family),
         vaapi_device: cfg.enc.vaapi_device.clone(),

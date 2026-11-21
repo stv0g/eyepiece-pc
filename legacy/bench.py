@@ -45,9 +45,9 @@ def encoder_args(a):
     """Reuse eyepiece_stream's encoder settings, but with raw stdin as the input."""
     class A: pass
     o = A()
-    o.size, o.fps, o.codec, o.encoder, o.bitrate = a.size, a.fps, a.codec, a.encoder, a.bitrate
+    o.fps, o.codec, o.encoder, o.bitrate = a.fps, a.codec, a.encoder, a.bitrate
     o.gop, o.slices, o.source, o.ffmpeg_extra = a.gop, a.slices, "custom", a.extra
-    o.input_args = f"-f rawvideo -pix_fmt yuv420p -s {a.size} -r {a.fps} -i pipe:0"
+    o.input_args = f"-f rawvideo -pix_fmt yuv420p -s {vs.PANEL_SIZE} -r {a.fps} -i pipe:0"
     o.region = o.display = o.input = o.kms_device = None
     o.vaapi_device = "/dev/dri/renderD128"
     o.intra_refresh = getattr(a, "intra_refresh", False)
@@ -151,7 +151,6 @@ def _flat_args(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("mode", choices=["encode", "python"])
-    ap.add_argument("--size", default="1920x1080")
     ap.add_argument("--fps", type=int, default=60)
     ap.add_argument("--codec", default="h264")
     ap.add_argument("--encoder", default="x264")
@@ -169,7 +168,7 @@ def main():
         print(bench_python(a))
         return
 
-    frames, _ = make_frames(a.size, 60)
+    frames, _ = make_frames(vs.PANEL_SIZE, 60)
     if not a.sweep:
         print(bench_encode(a, frames))
         return

@@ -133,9 +133,6 @@ struct Args {
     list: bool,
 
     // ---- video ----
-    /// encoded size (goggles panel: 1920x1080)
-    #[arg(long, default_value = "1920x1080")]
-    size: String,
     /// frame rate (panel runs at 100 Hz; lowered to the source refresh if that is lower)
     #[arg(long, default_value_t = 100)]
     fps: u32,
@@ -345,7 +342,6 @@ fn real_main(a: Args, log: LogFn) -> Result<(), String> {
         print!("{}", eyepiece_capture::kms::list(&a.kms_device)?);
         return Ok(());
     }
-    let (w, h) = parse_size(&a.size)?;
     let codec: Codec = a.codec.parse()?;
     let bitrate = parse_rate(&a.bitrate)?;
     let sync: SyncMode = a.sync.parse()?;
@@ -357,8 +353,6 @@ fn real_main(a: Args, log: LogFn) -> Result<(), String> {
     let enc = EncoderConfig {
         codec,
         encoder: a.encoder.clone(),
-        width: w,
-        height: h,
         fps: a.fps,
         bitrate,
         gop: if a.gop > 0 { a.gop } else { 2 * a.fps },

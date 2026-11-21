@@ -35,6 +35,9 @@ EP_VIDEO, EP_PING, EP_CTRL, EP_STREAM = 0x01, 0x02, 0x03, 0x04
 EP_POSE, EP_PONG, EP_LOG, EP_FRAME, EP_INFO = 0x81, 0x82, 0x83, 0x84, 0x85
 EP_FLAG_KEY = 0x01
 EP_CODEC_H264, EP_CODEC_HEVC = 0, 1
+# encoded size, fixed: the goggles have no display scaler and the bridge refuses any other size
+PANEL_W, PANEL_H = 1920, 1080
+PANEL_SIZE = f"{PANEL_W}x{PANEL_H}"
 EP_OP_RECENTER, EP_OP_QUIT = 1, 2
 HDR = struct.Struct("<BBBBI")
 START = b"\x00\x00\x00\x01"
@@ -183,11 +186,11 @@ class TeeToPlayer:
 
 
 def build_ffmpeg_cmd(a):
-    w, h = a.size.split("x")
+    w, h = PANEL_W, PANEL_H
     g = [a.ffmpeg, "-hide_banner", "-loglevel", "warning", "-nostdin",
          "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "32", "-analyzeduration", "0"]
     if a.source == "x11":
-        region = a.region or a.size
+        region = a.region or PANEL_SIZE
         rw, rh = region.split("+")[0].split("x")
         off = region.split("+", 1)[1].replace("+", ",") if "+" in region else "0,0"
         g += ["-f", "x11grab", "-draw_mouse", "1", "-framerate", str(a.fps),
@@ -198,7 +201,7 @@ def build_ffmpeg_cmd(a):
             g += ["-plane_id", str(a.kms_plane)]
         g += ["-i", "-"]
     elif a.source == "test":
-        g += ["-re", "-f", "lavfi", "-i", f"testsrc2=size={a.size}:rate={a.fps}"]
+        g += ["-re", "-f", "lavfi", "-i", f"testsrc2=size={PANEL_SIZE}:rate={a.fps}"]
     elif a.source == "file":
         if not a.input:
             raise SystemExit("--source file needs --input FILE")
@@ -544,7 +547,7 @@ def main():
     ap.add_argument("--stop-bridge", action="store_true", help="ask the bridge to exit when we quit")
     ap.add_argument("--source", default="x11", choices=["x11", "kms", "test", "file", "custom", "flv-stdin"])
     ap.add_argument("--display", default=os.environ.get("DISPLAY", ":0.0"))
-    ap.add_argument("--region", help="x11 capture region WxH+X+Y (default: --size at 0,0)")
+    ap.add_argument("--region", help="x11 capture region WxH+X+Y (default: 1920x1080 at 0,0)")
     ap.add_argument("--kms-device", default="/dev/dri/card0")
     ap.add_argument("--kms-plane", type=int, default=0,
                     help="DRM plane to capture (one per monitor; 0 = first with a framebuffer). "
@@ -553,7 +556,6 @@ def main():
                     help="ffmpeg binary (kms needs one with CAP_SYS_ADMIN, e.g. ~/.local/bin/ffmpeg-kms; env EYEPIECE_FFMPEG)")
     ap.add_argument("--input", help="file for --source file")
     ap.add_argument("--input-args", default="", help="ffmpeg input args for --source custom")
-    ap.add_argument("--size", default="1920x1080", help="encoded size (goggles panel is 1920x1080)")
     ap.add_argument("--fps", type=int, default=60)
     ap.add_argument("--codec", default="h264", choices=["h264", "hevc"])
     ap.add_argument("--encoder", default="auto", choices=["auto", "x264", "nvenc", "vaapi"])
@@ -604,8 +606,7 @@ def main():
             while link.alive:
                 time.sleep(0.2)
             return
-        w, h = map(int, a.size.split("x"))
-        link.send(EP_STREAM, struct.pack("<HHBBH", w, h, EP_CODEC_HEVC if a.codec == "hevc" else EP_CODEC_H264,
+        link.send(EP_STREAM, struct.pack("<HHBBH", PANEL_W, PANEL_H, EP_CODEC_HEVC if a.codec == "hevc" else EP_CODEC_H264,
                                          min(a.fps, 255), 0))
         if a.source == "flv-stdin":
             src = sys.stdin.buffer

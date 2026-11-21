@@ -107,13 +107,11 @@ Without `--deploy`, the bridge started from the goggles' menu is used. With `--d
 bridge is pushed to `/data/local/tmp/eyepiece/` and started with `-1 -b` (it exits with the PC
 session); its log is `/data/local/tmp/eyepiece.log` on the goggles.
 
-### Resolution (`--size`)
+### Resolution
 
-`--size 1280x720` or `--size 960x540` encode a smaller picture. The goggles have no plane
-scaler, so it is shown **1:1, centred, with a black border** (a smaller window, not an upscale).
-Measured with the test source (x264): capture→shown 12.0 ms at 1080p, 9.3 ms at 720p, about
-6.5 ms at 540p — encode and decode time scale with the pixel count. Use it when latency matters
-more than picture size; the default 1920x1080 fills the panel.
+The stream is always 1920x1080, the goggles' panel size: they have no display scaler, and the
+bridge refuses any other size. Every source is scaled to fit on the PC and letterboxed with
+black bars (`--no-letterbox` stretches instead).
 
 Stdin: `r` recenter, `i` force an IDR, `q` quit (each + Enter). Ctrl-C quits cleanly
 (twice: hard). `--dump out.h264` also writes the exact Annex-B stream; `--no-connect

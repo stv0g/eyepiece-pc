@@ -48,8 +48,6 @@ pub struct EncoderConfig {
     pub codec: Codec,
     /// auto | nvenc | vaapi | amf | qsv | x264 (software) | any FFmpeg encoder name
     pub encoder: String,
-    pub width: u32,
-    pub height: u32,
     pub fps: u32,
     pub bitrate: u64,
     /// keyframe interval in frames
