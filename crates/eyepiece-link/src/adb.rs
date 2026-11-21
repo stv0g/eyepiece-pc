@@ -109,39 +109,79 @@ impl Adb {
         !self.shell("pidof eyepiece_bridge", false).unwrap_or_default().trim().is_empty()
     }
 
-    /// Push `bridge` to the goggles and start it with `-1` (exit with the PC session: a
-    /// bridge left running keeps the goggles black) plus `extra_args`.
-    pub fn deploy(&self, bridge: &Path, extra_args: &str, log: &dyn Fn(String)) -> Result<(), String> {
-        if !bridge.is_file() {
-            return Err(format!(
-                "{} not found — download eyepiece_bridge from the natartos release or pass --bridge",
-                bridge.display()
-            ));
-        }
-        self.shell(&format!("mkdir -p {DEVICE_DIR}"), true)?;
-        self.run(&["push", &bridge.to_string_lossy(), &format!("{DEVICE_DIR}/eyepiece_bridge")], true)?;
-        self.shell(&format!("chmod 755 {DEVICE_DIR}/eyepiece_bridge"), true)?;
+    /// Start the bridge on the goggles with `-1` (exit with the PC session: a bridge left
+    /// running keeps the goggles black) plus `extra_args`. `bridge` = a local binary to push
+    /// first; `None` = use one already on the goggles (pushed earlier, or the one natartos
+    /// installed with the Eyepiece mod).
+    pub fn deploy(&self, bridge: Option<&Path>, extra_args: &str, log: &dyn Fn(String)) -> Result<(), String> {
+        let exe = match bridge {
+            Some(bridge) => {
+                if !bridge.is_file() {
+                    return Err(format!("{} not found (--bridge)", bridge.display()));
+                }
+                self.shell(&format!("mkdir -p {DEVICE_DIR}"), true)?;
+                self.run(&["push", &bridge.to_string_lossy(), &format!("{DEVICE_DIR}/eyepiece_bridge")], true)?;
+                self.shell(&format!("chmod 755 {DEVICE_DIR}/eyepiece_bridge"), true)?;
+                format!("{DEVICE_DIR}/eyepiece_bridge")
+            }
+            None => {
+                let p = self
+                    .shell(
+                        &format!(
+                            "for p in {DEVICE_DIR}/eyepiece_bridge {MENU_BRIDGE}; do [ -x $p ] && echo $p && break; done"
+                        ),
+                        true,
+                    )?
+                    .trim()
+                    .to_string();
+                if p.is_empty() {
+                    return Err("no eyepiece_bridge on the PC (next to this program, or --bridge PATH) \
+                                and none on the goggles: install natartos with the Eyepiece mod, or \
+                                download eyepiece_bridge from the natartos release"
+                        .into());
+                }
+                log(format!("no local eyepiece_bridge: starting the one on the goggles ({p})"));
+                p
+            }
+        };
         self.stop_bridge();
-        self.shell(
-            &format!("nohup {DEVICE_DIR}/eyepiece_bridge -1 -b {extra_args} >/dev/null 2>&1 < /dev/null &"),
-            true,
-        )?;
-        std::thread::sleep(Duration::from_millis(800));
-        let pid = self.shell("pidof eyepiece_bridge", false).unwrap_or_default();
-        if pid.is_empty() {
-            let tail = self.shell(&format!("tail -n 20 {DEVICE_LOG}"), false).unwrap_or_default();
-            return Err(format!("eyepiece_bridge did not start:\n{tail}"));
-        }
+        // a fresh log: the "listening on" wait below must not see an older run's line
+        self.shell(&format!("rm -f {DEVICE_LOG}"), false)?;
+        self.shell(&format!("nohup {exe} -1 -b {extra_args} >/dev/null 2>&1 < /dev/null &"), true)?;
         // adb forward accepts a TCP connect even when nothing listens on the goggles yet (and
         // closes it right away), so a connect is no proof: wait for the bridge's own log line.
-        // Startup takes >1 s when the overlay has no fb_gui_hide (1 s wait for its ack).
-        let t_end = std::time::Instant::now() + Duration::from_secs(6);
-        while self.shell(&format!("grep -q 'listening on' {DEVICE_LOG} && echo y"), false).unwrap_or_default().trim() != "y" {
-            if std::time::Instant::now() >= t_end {
+        // Startup takes >1 s without fb_gui_hide (overlay ack wait), and a bridge that switches
+        // USB to RNDIS + adb drops adb for a few seconds (sometimes until `adb reconnect`).
+        let t0 = std::time::Instant::now();
+        let mut last_reconnect = t0;
+        let mut offline_logged = false;
+        loop {
+            match self.shell(&format!("cat {DEVICE_LOG} 2>/dev/null; true"), true) {
+                Ok(l) if l.contains("listening on") => break,
+                Ok(l) if l.contains("shutting down") || l.contains("giving up") => {
+                    return Err(format!("eyepiece_bridge exited during startup:\n{l}"));
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    if !offline_logged {
+                        log("goggles' USB is re-enumerating (bridge switches to USB network) …".into());
+                        offline_logged = true;
+                    }
+                    if last_reconnect.elapsed() >= Duration::from_secs(3) {
+                        let _ = self.run(&["reconnect", "offline"], false);
+                        last_reconnect = std::time::Instant::now();
+                    }
+                }
+            }
+            if t0.elapsed() >= Duration::from_secs(25) {
                 let tail = self.shell(&format!("tail -n 20 {DEVICE_LOG}"), false).unwrap_or_default();
                 return Err(format!("eyepiece_bridge is not listening:\n{tail}"));
             }
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        let pid = self.shell("pidof eyepiece_bridge", false).unwrap_or_default();
+        for l in self.shell(&format!("grep 'rndis:' {DEVICE_LOG}"), false).unwrap_or_default().lines() {
+            log(format!("goggles: {}", l.split_once(' ').map(|x| x.1).unwrap_or(l)));
         }
         log(format!("eyepiece_bridge running on goggles (pid {pid})"));
         if !self.overlay_loaded() {

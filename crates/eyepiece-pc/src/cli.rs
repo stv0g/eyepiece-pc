@@ -18,8 +18,9 @@ use eyepiece_link::{LinkOptions, LogFn};
 const BRIDGE_NAME: &str = "eyepiece_bridge";
 
 /// `--deploy` without `--bridge`: `eyepiece_bridge` next to this executable, else
-/// `$XDG_DATA_HOME/eyepiece/eyepiece_bridge` (default `~/.local/share/...`).
-fn find_bridge() -> Result<PathBuf, String> {
+/// `$XDG_DATA_HOME/eyepiece/eyepiece_bridge` (default `~/.local/share/...`); `None` = no local
+/// bridge → the one already on the goggles (natartos' Eyepiece mod) is started.
+fn find_bridge() -> Option<PathBuf> {
     let mut tried = vec![];
     if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
         tried.push(dir.join(BRIDGE_NAME));
@@ -31,15 +32,7 @@ fn find_bridge() -> Result<PathBuf, String> {
     if let Some(d) = data {
         tried.push(d.join("eyepiece").join(BRIDGE_NAME));
     }
-    if let Some(p) = tried.iter().find(|p| p.is_file()) {
-        return Ok(p.clone());
-    }
-    Err(format!(
-        "--deploy: {BRIDGE_NAME} not found (looked in: {}).\n  \
-         Download {BRIDGE_NAME} from the natartos release and put it there, or pass --bridge PATH.\n  \
-         Without --deploy, the bridge started from the goggles' menu (natartos Eyepiece mod) is used.",
-        tried.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
-    ))
+    tried.into_iter().find(|p| p.is_file())
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -65,6 +58,12 @@ pub struct Args {
     /// host to connect to (adb forward ends on 127.0.0.1; RNDIS/Wi-Fi: goggles IP + bridge -A)
     #[arg(long, default_value = "127.0.0.1")]
     pub host: String,
+    /// data link: auto (the goggles' USB network when it is connected, else adb forward) |
+    /// usb-net (USB network only) | adb (adb forward only). The bridge switches the goggles'
+    /// USB to network + adb once per boot and hands out an address by DHCP; connect that
+    /// network on the PC once (no special settings) for ~2–4 ms lower latency
+    #[arg(long, default_value = "auto")]
+    pub transport: String,
     /// don't run `adb forward` (host bridge, RNDIS, forward set up elsewhere)
     #[arg(long)]
     pub no_forward: bool,
@@ -342,6 +341,48 @@ fn limit_privileges(a: &Args) -> Result<(), String> {
 }
 
 
+/// Where to connect: the goggles' USB network if usable (see `--transport`), else the
+/// `adb forward` end (`--host`, 127.0.0.1).
+fn pick_host(a: &Args, log: &dyn Fn(String)) -> Result<String, String> {
+    use eyepiece_link::net;
+    let mode = a.transport.as_str();
+    match mode {
+        "auto" | "usb-net" | "adb" => {}
+        m => return Err(format!("--transport {m}: expected auto | usb-net | adb")),
+    }
+    if mode == "adb" || a.host != "127.0.0.1" {
+        return Ok(a.host.clone()); // explicit --host (host bridge, Wi-Fi, …) wins
+    }
+    // right after the bridge's USB switch the interface appears and DHCP needs a moment
+    let wait = Duration::from_secs(if mode == "usb-net" { 15 } else { 4 });
+    match net::wait_usb_net(wait) {
+        Some(n) if n.configured => {
+            log(format!("data link: goggles' USB network ({} → {})", n.ifname, net::GOGGLES_ADDR));
+            Ok(net::GOGGLES_ADDR.into())
+        }
+        Some(n) => {
+            let msg = format!(
+                "the goggles' USB network ({}) is not connected on this PC. Connect it once in your \
+                 network settings (wired connection, automatic/DHCP: the goggles hand out the \
+                 address) for ~2–4 ms lower latency",
+                n.ifname
+            );
+            if mode == "usb-net" {
+                return Err(msg);
+            }
+            log(format!("NOTICE: {msg}. Using adb meanwhile."));
+            Ok(a.host.clone())
+        }
+        None if mode == "usb-net" => Err("the goggles' USB network was not found on this PC \
+            (bridge started without it, an older bridge, or not Linux)"
+            .into()),
+        None => {
+            log("data link: adb forward (no USB network from the goggles)".into());
+            Ok(a.host.clone())
+        }
+    }
+}
+
 impl Default for Args {
     /// The CLI defaults (`eyepiece-pc` without options).
     fn default() -> Args {
@@ -395,11 +436,8 @@ pub fn prepare(a: &Args, log: &LogFn) -> Result<Option<Prepared>, String> {
     let adb = Adb::new(a.adb.clone(), a.serial.clone());
     if !a.no_connect {
         if a.deploy {
-            let bridge = match &a.bridge {
-                Some(b) => b.clone(),
-                None => find_bridge()?,
-            };
-            adb.deploy(&bridge, &a.bridge_args, &**log)?;
+            let bridge = a.bridge.clone().or_else(find_bridge);
+            adb.deploy(bridge.as_deref(), &a.bridge_args, &**log)?;
         } else if !a.no_forward && !adb.bridge_running() {
             log("no eyepiece_bridge running on the goggles: start Eyepiece from the goggles' menu \
                  (natartos), or use --deploy"
@@ -409,8 +447,9 @@ pub fn prepare(a: &Args, log: &LogFn) -> Result<Option<Prepared>, String> {
             adb.forward(a.port, a.port)?;
         }
     }
+    let host = if a.no_connect { a.host.clone() } else { pick_host(a, &**log)? };
     let link = (!a.no_connect).then(|| LinkOptions {
-        addr: format!("{}:{}", a.host, a.port),
+        addr: format!("{}:{}", host, a.port),
         connect_timeout: Duration::from_secs(15),
         opentrack: (!a.opentrack.is_empty()).then(|| a.opentrack.clone()),
         print_pose: a.print_pose,
