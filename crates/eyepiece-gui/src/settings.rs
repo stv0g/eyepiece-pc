@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct UiPrefs {
+    /// simple main view (default) instead of the full view
+    pub simple: bool,
     pub preview: bool,
     pub preview_width: u32,
     pub preview_fps: u32,
@@ -21,8 +23,27 @@ pub struct UiPrefs {
 
 impl Default for UiPrefs {
     fn default() -> Self {
-        UiPrefs { preview: false, preview_width: 640, preview_fps: 30, preview_keyframes_only: false, pin_window_s: 10.0 }
+        UiPrefs { simple: true, preview: false, preview_width: 640, preview_fps: 30, preview_keyframes_only: false, pin_window_s: 10.0 }
     }
+}
+
+/// Quality presets of the simple view: (name, explanation, codec, bitrate). They set only
+/// codec + bitrate; everything else keeps its value. Basis: device A/B runs (H.264 lowest
+/// latency; H.265 about +1 ms PC encode, clearly better picture at the same bitrate).
+pub const PRESETS: &[(&str, &str, &str, &str)] = &[
+    ("Low latency", "H.264, 20 Mbit/s (the default): lowest latency", "h264", "20M"),
+    ("High quality", "H.265, 30 Mbit/s: sharper picture, about 1 ms more encode time", "hevc", "30M"),
+    ("Low bandwidth", "H.265, 8 Mbit/s: for slow links; H.265 keeps more detail at low bitrates", "hevc", "8M"),
+];
+
+/// Index of the preset the options match, if any.
+pub fn preset_of(a: &Args) -> Option<usize> {
+    let codec = match a.codec.as_str() {
+        "h265" => "hevc",
+        "avc" => "h264",
+        c => c,
+    };
+    PRESETS.iter().position(|p| p.2 == codec && p.3.eq_ignore_ascii_case(&a.bitrate))
 }
 
 /// Measured numbers of a pin: means over the pinned window of the per-interval values
@@ -232,6 +253,15 @@ mod tests {
 
     fn table(a: &Args) -> toml::Table {
         toml::Table::try_from(a).unwrap()
+    }
+
+    #[test]
+    fn presets_match_defaults_and_aliases() {
+        assert_eq!(preset_of(&Args::default()), Some(0), "the CLI default is the first preset");
+        let a = Args { codec: "h265".into(), bitrate: "8m".into(), ..Args::default() };
+        assert_eq!(preset_of(&a), Some(2));
+        let a = Args { bitrate: "25M".into(), ..Args::default() };
+        assert_eq!(preset_of(&a), None);
     }
 
     #[test]

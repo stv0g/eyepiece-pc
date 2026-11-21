@@ -36,6 +36,8 @@ pub struct EngineShared {
     pub facts: Mutex<Vec<String>>,
     /// last "NOTICE: …" log line (something the user should do, e.g. connect the USB network)
     pub notice: Mutex<Option<String>>,
+    /// "USB network" / "adb", from the session's `data link:` log line
+    pub data_link: Mutex<Option<String>>,
 }
 
 pub struct Engine {
@@ -56,6 +58,7 @@ impl Engine {
             phase: Mutex::new(Phase::Preparing),
             facts: Mutex::new(vec![]),
             notice: Mutex::new(None),
+            data_link: Mutex::new(None),
         });
         let log: LogFn = {
             let (sh, rp) = (shared.clone(), repaint.clone());
@@ -66,6 +69,13 @@ impl Engine {
                 }
                 if let Some(n) = s.strip_prefix("NOTICE: ") {
                     *sh.notice.lock().unwrap() = Some(n.to_string());
+                    if n.contains("Using adb") {
+                        *sh.data_link.lock().unwrap() = Some("adb".into());
+                    }
+                }
+                if let Some(d) = s.strip_prefix("data link: ") {
+                    let l = if d.contains("USB network") { "USB network" } else { "adb" };
+                    *sh.data_link.lock().unwrap() = Some(l.into());
                 }
                 let mut l = sh.log.lock().unwrap();
                 l.push_back(s);

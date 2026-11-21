@@ -173,6 +173,21 @@ eyepiece-gui --start -- --source test --encoder x264    # eyepiece-pc options af
 eyepiece-gui --config my.toml                       # another settings file
 ```
 
+It opens in a **simple view**: a big Start/Stop button, a status line (connected, data link
+USB network or adb, fps, capture→shown latency), notices (e.g. "connect the USB network"),
+and only the main choices:
+
+- **Show**: a screen (KMS output, greyed out without the capture permission), a screen or
+  window picked through the PipeWire portal, the X11 screen, or a test pattern (Windows:
+  the main screen).
+- **Quality**: *Low latency* (H.264, 20 Mbit/s, the default), *High quality* (H.265,
+  30 Mbit/s: sharper, about 1 ms more encode time), *Low bandwidth* (H.265, 8 Mbit/s). They
+  set codec and bitrate only; anything else shows as *Custom*.
+- **Head tracking** on/off (to opentrack) and Recenter; **Preview** on/off.
+
+*Full view* switches to everything below (and *Simple view* back); both edit the same
+settings.
+
 - **Left panel**: source and output, bridge (start / use running), encoder, bitrate,
   fps, Start/Stop, head tracking on/off, Recenter, Force IDR, preview on/off.
 - **Overview**: the preview (the encoded stream decoded in-process: what the goggles get,
@@ -186,9 +201,12 @@ eyepiece-gui --config my.toml                       # another settings file
   paste one and Apply).
 - **Log**: the session log.
 
-Settings and pins are kept in `~/.config/eyepiece/eyepiece-gui.toml` (Windows:
-`%APPDATA%\eyepiece\config\eyepiece-gui.toml`). Options apply on the next Start; head
-tracking, preview, Recenter and Force IDR apply while streaming.
+Settings and pins are saved automatically (one second after a change, on Start and on
+exit) in `~/.config/eyepiece/eyepiece-gui.toml` (Windows:
+`%APPDATA%\eyepiece\config\eyepiece-gui.toml`). *Reset to defaults* (simple view, or
+Advanced) resets all options and preview settings but keeps the pins and the view; it can
+be undone for 20 s. Options apply on the next Start; head tracking, preview, Recenter and
+Force IDR apply while streaming.
 
 The preview never slows the stream: the encode thread only copies each access unit into a
 small bounded queue (dropped when full, the preview then waits for the next keyframe), and a

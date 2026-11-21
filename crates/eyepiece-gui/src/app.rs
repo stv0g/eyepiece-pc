@@ -5,6 +5,9 @@ use crate::engine::{Engine, Phase};
 use crate::preview::Knobs;
 use crate::settings::{self, Pin, Saved, METRICS};
 use crate::{plot, pose};
+
+#[path = "simple.rs"]
+mod simple;
 use eframe::egui::{self, Color32, RichText, TextureHandle, TextureOptions};
 use eyepiece_pc::cli::Args;
 use eyepiece_pc::link::stats::Snapshot;
@@ -32,8 +35,13 @@ pub struct Options {
 pub struct App {
     saved: Saved,
     config: Option<PathBuf>,
-    dirty: bool,
-    last_save: Instant,
+    /// settings as last written (autosave compares against it)
+    saved_toml: String,
+    /// first unsaved change (autosave 1 s after the last change)
+    changed_at: Option<Instant>,
+    /// state before "Reset to defaults", for Undo
+    undo: Option<(Args, settings::UiPrefs, Instant)>,
+    kms_allowed: bool,
     engine: Option<Engine>,
     /// args the running engine was started with differ from the edited ones
     knobs: Arc<Knobs>,
@@ -98,8 +106,10 @@ impl App {
         let mut app = App {
             saved,
             config: opts.config.clone(),
-            dirty: false,
-            last_save: Instant::now(),
+            saved_toml: String::new(),
+            changed_at: None,
+            undo: None,
+            kms_allowed: crate::caps::kms_allowed(),
             engine: None,
             knobs,
             tab: Tab::Overview,
@@ -115,6 +125,7 @@ impl App {
             screenshot_sent: false,
             list_outputs_pending: false,
         };
+        app.saved_toml = toml::to_string(&app.saved).unwrap_or_default();
         app.tab = match app.opts.tab.as_deref() {
             Some("compare") => Tab::Compare,
             Some("advanced") => Tab::Advanced,
@@ -122,9 +133,7 @@ impl App {
             _ => Tab::Overview,
         };
         #[cfg(target_os = "linux")]
-        if app.saved.args.source == "kms" {
-            app.refresh_outputs();
-        }
+        app.refresh_outputs(); // for the output pickers (simple and full view)
         if app.opts.start {
             app.start(&ctx);
         }
@@ -142,6 +151,7 @@ impl App {
         }
         let c = ctx.clone();
         let repaint: Arc<dyn Fn() + Send + Sync> = Arc::new(move || c.request_repaint());
+        self.save_now(); // the settings of every run are kept
         let mut args = self.saved.args.clone();
         // an ffplay window only if asked for in Advanced; the GUI has its own preview
         args.list = false;
@@ -179,8 +189,8 @@ impl App {
                 self.status = Some(format!("saving settings failed: {e}"));
             }
         }
-        self.dirty = false;
-        self.last_save = Instant::now();
+        self.saved_toml = toml::to_string(&self.saved).unwrap_or_default();
+        self.changed_at = None;
     }
 
     fn last_snapshot(&self) -> Option<Snapshot> {
@@ -207,7 +217,6 @@ impl App {
             metrics,
             selected: true,
         });
-        self.dirty = true;
     }
 }
 
@@ -215,8 +224,28 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let before = settings::command_line(&self.saved.args);
-        let ui_before = (self.saved.ui.preview, self.saved.ui.preview_fps, self.saved.ui.preview_width, self.saved.ui.preview_keyframes_only);
 
+        if self.saved.ui.simple {
+            egui::CentralPanel::default().show(ui, |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.simple_view(ui));
+            });
+        } else {
+            self.full_view(ui);
+        }
+        self.after_frame(&ctx, &before);
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.save_now();
+        if let Some(mut e) = self.engine.take() {
+            e.stop();
+            e.join();
+        }
+    }
+}
+
+impl App {
+    fn full_view(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
         egui::Panel::left("main").default_size(310.0).resizable(true).show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| self.main_panel(ui));
@@ -239,23 +268,31 @@ impl eframe::App for App {
                 Tab::Log => self.log(ui),
             }
         });
+    }
 
+    fn after_frame(&mut self, ctx: &egui::Context, before: &str) {
         // live knobs->preview thread
         let u = &self.saved.ui;
         self.knobs.enabled.store(u.preview, Ordering::Relaxed);
         self.knobs.max_fps.store(u.preview_fps, Ordering::Relaxed);
         self.knobs.width.store(u.preview_width, Ordering::Relaxed);
         self.knobs.keyframes_only.store(u.preview_keyframes_only, Ordering::Relaxed);
-        if before != settings::command_line(&self.saved.args)
-            || ui_before != (u.preview, u.preview_fps, u.preview_width, u.preview_keyframes_only)
-        {
-            self.dirty = true;
-            if before != settings::command_line(&self.saved.args) {
-                self.cmdline_edit = settings::command_line(&self.saved.args);
+        if before != settings::command_line(&self.saved.args) {
+            self.cmdline_edit = settings::command_line(&self.saved.args);
+        }
+        // autosave: everything in the settings file (options, view, preview, pins), 1 s after
+        // the last change; also on Start and on exit
+        let now_toml = toml::to_string(&self.saved).unwrap_or_default();
+        if now_toml != self.saved_toml {
+            let t = *self.changed_at.get_or_insert_with(Instant::now);
+            if t.elapsed() > Duration::from_secs(1) {
+                self.save_now();
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(300));
             }
         }
-        if self.dirty && self.last_save.elapsed() > Duration::from_secs(2) {
-            self.save_now();
+        if self.undo.as_ref().is_some_and(|u| u.2.elapsed() > Duration::from_secs(20)) {
+            self.undo = None;
         }
 
         // repaint pacing: pose view ~60 Hz while tracking, otherwise on events + 4 Hz
@@ -288,16 +325,31 @@ impl eframe::App for App {
         }
     }
 
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.save_now();
-        if let Some(mut e) = self.engine.take() {
-            e.stop();
-            e.join();
-        }
+    /// Options + preview settings back to the defaults; pins and the view mode are kept.
+    /// Undo is offered for 20 s.
+    fn reset_defaults(&mut self) {
+        let d = Saved::default();
+        let old_args = std::mem::replace(&mut self.saved.args, d.args);
+        let simple = self.saved.ui.simple;
+        let old_ui = std::mem::replace(&mut self.saved.ui, settings::UiPrefs { simple, ..d.ui });
+        self.undo = Some((old_args, old_ui, Instant::now()));
     }
-}
 
-impl App {
+    fn undo_banner(&mut self, ui: &mut egui::Ui) {
+        if self.undo.is_none() {
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Settings reset to defaults (pins kept).").color(Color32::from_rgb(220, 180, 60)));
+            if ui.button("Undo").clicked() {
+                if let Some((a, u, _)) = self.undo.take() {
+                    self.saved.args = a;
+                    self.saved.ui = u;
+                }
+            }
+        });
+    }
+
     fn head_tracking_on(&self) -> bool {
         let a = &self.saved.args;
         a.head_tracking || a.no_video || a.print_pose
@@ -306,6 +358,9 @@ impl App {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("Eyepiece");
+            if ui.button("Simple view").on_hover_text("back to the simple main view").clicked() {
+                self.saved.ui.simple = true;
+            }
             ui.separator();
             let (txt, col) = match self.engine.as_ref().map(|e| e.phase()) {
                 None => ("idle".to_string(), ui.visuals().weak_text_color()),
@@ -363,6 +418,7 @@ impl App {
                 ui.label(RichText::new(format!("⚠ {n}")).color(Color32::from_rgb(220, 180, 60)));
             });
         }
+        self.undo_banner(ui);
         ui.add_space(6.0);
 
         let a = &mut self.saved.args;
@@ -521,7 +577,7 @@ impl App {
         if show_pv || show_pose {
             ui.horizontal_top(|ui| {
                 if show_pv {
-                    self.preview_view(ui);
+                    self.preview_view(ui, false);
                 }
                 if show_pose {
                     self.pose_view(ui);
@@ -532,7 +588,7 @@ impl App {
         self.latency_view(ui, snap.as_ref());
     }
 
-    fn preview_view(&mut self, ui: &mut egui::Ui) {
+    fn preview_view(&mut self, ui: &mut egui::Ui, full_width: bool) {
         if let Some(p) = self.engine.as_ref().and_then(|e| e.preview.as_ref()) {
             if let Some(img) = p.image.lock().unwrap().take() {
                 if img.seq != self.tex_seq {
@@ -545,7 +601,7 @@ impl App {
                 }
             }
         }
-        let w = (ui.available_width() * 0.55).clamp(240.0, 640.0);
+        let w = if full_width { ui.available_width() } else { (ui.available_width() * 0.55).clamp(240.0, 640.0) };
         let size = egui::vec2(w, w * 9.0 / 16.0);
         match (&self.tex, self.running()) {
             (Some(t), true) => {
@@ -676,7 +732,6 @@ impl App {
             }
             if ui.button("Delete selected").clicked() {
                 self.saved.pins.retain(|p| !p.selected);
-                self.dirty = true;
             }
             if ui.button("Copy table (Markdown)").clicked() {
                 ui.ctx().copy_text(pins_markdown(self.saved.pins.iter().filter(|p| p.selected)));
@@ -698,8 +753,7 @@ impl App {
                 ui.label(RichText::new("name").weak());
                 for &i in &sel {
                     if ui.add(egui::TextEdit::singleline(&mut self.saved.pins[i].name).desired_width(120.0)).changed() {
-                        self.dirty = true;
-                    }
+                            }
                 }
                 ui.end_row();
                 ui.label(RichText::new("time").weak());
@@ -766,8 +820,8 @@ impl App {
                 if ui.button("Copy").clicked() {
                     ui.ctx().copy_text(settings::command_line(&self.saved.args));
                 }
-                if ui.button("Reset to defaults").clicked() {
-                    self.saved.args = Saved::default().args;
+                if ui.button("Reset to defaults").on_hover_text("all options and preview settings; pins are kept; Undo for 20 s").clicked() {
+                    self.reset_defaults();
                 }
             });
             if let Some(e) = &self.cmdline_err {
