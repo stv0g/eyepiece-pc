@@ -40,20 +40,20 @@ pub fn cpu_to_pix(f: cap::CpuFormat) -> AVPixelFormat {
 
 /// Keeps a DRM device + a DRM_PRIME frames context matching the current framebuffer
 /// (recreated when size/format change).
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub struct DrmFrames {
     pub device: BufRef,
     frames: Option<(BufRef, u32, u32, u32)>,
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[repr(C)]
 struct DrmHolder {
     desc: AVDRMFrameDescriptor,
     _buf: cap::DmaBuf, // owns the dma-buf fds until FFmpeg releases the frame
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 unsafe extern "C" fn free_drm(_opaque: *mut std::ffi::c_void, data: *mut u8) {
     drop(Box::from_raw(data as *mut DrmHolder));
 }
@@ -61,7 +61,7 @@ unsafe extern "C" fn free_vec(opaque: *mut std::ffi::c_void, _data: *mut u8) {
     drop(Box::from_raw(opaque as *mut Vec<u8>));
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 impl DrmFrames {
     pub fn new(device: &str) -> Result<DrmFrames, String> {
         Ok(DrmFrames { device: hwdevice(AVHWDeviceType::AV_HWDEVICE_TYPE_DRM, Some(device))?, frames: None })

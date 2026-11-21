@@ -96,8 +96,8 @@ pub struct Args {
     pub no_connect: bool,
 
     // ---- source ----
-    /// kms | pipewire | x11 | test | file | dxgi
-    #[arg(long, default_value = if cfg!(windows) { "dxgi" } else { "kms" })]
+    /// kms | pipewire | x11 | test | file | dxgi | screencapturekit (macOS)
+    #[arg(long, default_value = if cfg!(target_os = "macos") { "screencapturekit" } else if cfg!(windows) { "dxgi" } else { "kms" })]
     pub source: String,
     /// kms: DRM device (the GPU driving the displays)
     #[arg(long, default_value = "/dev/dri/card0")]
@@ -127,9 +127,12 @@ pub struct Args {
     /// pipewire: file to keep the portal's restore token in (no dialog next time)
     #[arg(long)]
     pub restore_token: Option<PathBuf>,
-    /// pipewire: draw the cursor into the stream
+    /// pipewire / screencapturekit: draw the cursor into the stream
     #[arg(long)]
     pub cursor: bool,
+    /// macOS: display ID from --list (default: first available display)
+    #[arg(long)]
+    pub display_id: Option<u32>,
     /// dxgi: adapter,output index
     #[arg(long, default_value = "0,0")]
     pub dxgi: String,
@@ -137,7 +140,7 @@ pub struct Args {
     /// from VAAPI test surfaces through the same DMA-BUF path
     #[arg(long, hide = true)]
     pub kms_simulate: bool,
-    /// list KMS outputs and planes, then exit
+    /// list displays (KMS outputs/planes on Linux, ScreenCaptureKit displays on macOS)
     #[arg(long)]
     pub list: bool,
 
@@ -154,7 +157,7 @@ pub struct Args {
     /// shows a stereo test pattern
     #[arg(long)]
     pub stereo: bool,
-    /// auto (nvenc→vaapi→amf→qsv→x264) | nvenc | vaapi | amf | qsv | x264 | any FFmpeg encoder name
+    /// auto (VideoToolbox on macOS, else nvenc→vaapi→amf→qsv; then software) | videotoolbox | nvenc | vaapi | amf | qsv | x264 | FFmpeg name
     #[arg(long, default_value = "auto")]
     pub encoder: String,
     /// VAAPI render node (GPU conversion, VAAPI encode)
@@ -296,9 +299,11 @@ fn build_source(a: &Args) -> Result<SourceKind, String> {
             let (ad, out) = a.dxgi.split_once(',').unwrap_or(("0", "0"));
             SourceKind::Dxgi { adapter: ad.parse().unwrap_or(0), output: out.parse().unwrap_or(0) }
         }
+        #[cfg(target_os = "macos")]
+        "screencapturekit" | "sck" => SourceKind::ScreenCaptureKit { display_id: a.display_id, cursor: a.cursor },
         "test" => SourceKind::Test { lavfi: a.lavfi.clone() },
         "file" => SourceKind::File { path: a.input.clone().ok_or("--source file needs --input FILE")? },
-        s => return Err(format!("source {s} not available in this build (kms|pipewire|x11|test|file|dxgi; pipewire needs --features pipewire)")),
+        s => return Err(format!("source {s} not available in this build (kms|pipewire|x11|test|file|dxgi|screencapturekit; pipewire needs --features pipewire)")),
     })
 }
 
@@ -456,6 +461,11 @@ pub fn prepare(a: &Args, log: &LogFn) -> Result<Option<Prepared>, String> {
     #[cfg(target_os = "linux")]
     if a.list {
         print!("{}", eyepiece_capture::kms::list(&a.kms_device)?);
+        return Ok(None);
+    }
+    #[cfg(target_os = "macos")]
+    if a.list {
+        print!("{}", eyepiece_capture::screencapturekit::list()?);
         return Ok(None);
     }
     let codec: Codec = a.codec.parse()?;

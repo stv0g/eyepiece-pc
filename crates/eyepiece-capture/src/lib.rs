@@ -16,10 +16,12 @@ pub mod portal;
 pub mod x11;
 #[cfg(windows)]
 pub mod dxgi;
+#[cfg(target_os = "macos")]
+pub mod screencapturekit;
 
 pub mod pacer;
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use std::os::fd::OwnedFd;
 
 /// fourcc helper (DRM_FORMAT_*).
@@ -55,7 +57,7 @@ pub fn opaque_fourcc(f: u32) -> u32 {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub struct DmaObject {
     pub fd: OwnedFd,
@@ -70,7 +72,7 @@ pub struct DmaPlane {
 }
 
 /// A GPU buffer shared as DMA-BUF (KMS framebuffer, PipeWire dmabuf).
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub struct DmaBuf {
     pub width: u32,
@@ -106,7 +108,7 @@ pub struct CpuImage {
 
 #[derive(Debug)]
 pub enum FrameData {
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     DmaBuf(DmaBuf),
     Cpu(CpuImage),
 }
@@ -124,7 +126,7 @@ pub struct Frame {
 impl Frame {
     pub fn size(&self) -> (u32, u32) {
         match &self.data {
-            #[cfg(unix)]
+            #[cfg(target_os = "linux")]
             FrameData::DmaBuf(d) => (d.width, d.height),
             FrameData::Cpu(c) => (c.width, c.height),
         }

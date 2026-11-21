@@ -3,7 +3,7 @@
 
 use crate::ffi::*;
 use crate::hw::wrap_cpu;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use crate::hw::DrmFrames;
 use std::ptr;
 use eyepiece_capture::pacer::Pacer;
@@ -28,9 +28,9 @@ pub trait Source: Send {
 /// A screen capture backend → AVFrames (DMA-BUF → DRM_PRIME, CPU → wrapped buffer).
 pub struct CaptureSource {
     cap: Box<dyn Capture>,
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     drm: Option<DrmFrames>,
-    #[cfg_attr(not(unix), allow(dead_code))]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     drm_device: String,
 }
 impl CaptureSource {
@@ -38,7 +38,7 @@ impl CaptureSource {
     pub fn new(cap: Box<dyn Capture>, drm_device: &str) -> CaptureSource {
         CaptureSource {
             cap,
-            #[cfg(unix)]
+            #[cfg(target_os = "linux")]
             drm: None,
             drm_device: drm_device.into(),
         }
@@ -48,7 +48,7 @@ impl Source for CaptureSource {
     fn next(&mut self, force: bool) -> Result<Option<SourceFrame>, String> {
         let Some(f) = self.cap.next_frame(force)? else { return Ok(None) };
         let frame = match f.data {
-            #[cfg(unix)]
+            #[cfg(target_os = "linux")]
             FrameData::DmaBuf(d) => {
                 if self.drm.is_none() {
                     self.drm = Some(DrmFrames::new(&self.drm_device)?);

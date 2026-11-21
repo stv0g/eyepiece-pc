@@ -35,6 +35,8 @@ pub enum SourceKind {
     PipeWire { restore_token_file: Option<PathBuf>, cursor: bool },
     #[cfg(windows)]
     Dxgi { adapter: u32, output: u32 },
+    #[cfg(target_os = "macos")]
+    ScreenCaptureKit { display_id: Option<u32>, cursor: bool },
     Test { lavfi: Option<String> },
     File { path: String },
 }
@@ -161,6 +163,11 @@ fn make_source(cfg: &Config) -> Result<Box<dyn Source>, String> {
         SourceKind::Dxgi { adapter, output } => {
             let d = eyepiece_capture::dxgi::DxgiCapture::open(*adapter, *output, fps)?;
             Box::new(eyepiece_av::CaptureSource::new(Box::new(d), ""))
+        }
+        #[cfg(target_os = "macos")]
+        SourceKind::ScreenCaptureKit { display_id, cursor } => {
+            let capture = eyepiece_capture::screencapturekit::ScreenCapture::open(*display_id, cfg.enc.fps, *cursor)?;
+            Box::new(eyepiece_av::CaptureSource::new(Box::new(capture), ""))
         }
         SourceKind::Test { lavfi } => {
             let (w, h) = cfg.frame_size();

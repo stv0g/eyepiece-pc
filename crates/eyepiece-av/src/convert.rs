@@ -150,7 +150,7 @@ impl Converter {
         let chain = if is_drm {
             format!("hwmap=derive_device=vaapi:mode=read,{}", self.vaapi_chain(w, h))
         } else if self.cfg.target == Target::Vaapi
-            || (self.cfg.gpu_scale_cpu_input && (w as u32, h as u32) != (self.cfg.width, self.cfg.height))
+            || (cfg!(target_os = "linux") && self.cfg.gpu_scale_cpu_input && (w as u32, h as u32) != (self.cfg.width, self.cfg.height))
         {
             // GPU scaling pays off only when there is something to scale
             format!("hwupload,{}", self.vaapi_chain(w, h))
