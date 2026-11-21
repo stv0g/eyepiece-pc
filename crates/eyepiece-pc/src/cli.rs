@@ -3,17 +3,17 @@
 //! and use [`prepare`] + [`run_prepared`], so every frontend takes the same code path.
 //! Replaces legacy/eyepiece_stream.py (same protocol, same bridge). See README.md.
 
+use crate::session::{self, Config, Control, Events, SourceKind};
 use clap::Parser;
+use eyepiece_av::{Codec, EncoderConfig};
+use eyepiece_capture::SyncMode;
+use eyepiece_link::adb::Adb;
+use eyepiece_link::{LinkOptions, LogFn};
 use std::io::BufRead;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
-use crate::session::{self, Config, Control, Events, SourceKind};
-use eyepiece_av::{Codec, EncoderConfig};
-use eyepiece_capture::SyncMode;
-use eyepiece_link::adb::Adb;
-use eyepiece_link::{LinkOptions, LogFn};
 
 const BRIDGE_NAME: &str = "eyepiece_bridge";
 
@@ -22,7 +22,10 @@ const BRIDGE_NAME: &str = "eyepiece_bridge";
 /// bridge → the one already on the goggles (natartos' Eyepiece mod) is started.
 fn find_bridge() -> Option<PathBuf> {
     let mut tried = vec![];
-    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
         tried.push(dir.join(BRIDGE_NAME));
     }
     let data = std::env::var_os("XDG_DATA_HOME")
@@ -36,14 +39,22 @@ fn find_bridge() -> Option<PathBuf> {
 }
 
 #[derive(Parser, Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default))]
-#[command(name = "eyepiece-pc", version, about = "Stream the PC screen to DJI Goggles 3 over USB (Eyepiece PC side)",
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
+#[command(
+    name = "eyepiece-pc",
+    version,
+    about = "Stream the PC screen to DJI Goggles 3 over USB (Eyepiece PC side)",
     after_help = "Keys (stdin): r + Enter = recenter, i + Enter = force IDR, q + Enter = quit.\n\
 Examples:\n  eyepiece-pc                                 # start the bridge on the goggles, KMS capture of the first screen\n  \
 eyepiece-pc --output eDP-1 --encoder nvenc --bitrate 30M\n  \
 eyepiece-pc --no-deploy                     # use the bridge started from the goggles' menu\n  \
 eyepiece-pc --source test --host 127.0.0.1 --no-forward   # against eyepiece_bridge_host -N\n  \
-eyepiece-pc --list                          # outputs / planes")]
+eyepiece-pc --list                          # outputs / planes"
+)]
 pub struct Args {
     // ---- transport ----
     /// adb executable
@@ -157,7 +168,7 @@ pub struct Args {
     /// shows a stereo test pattern
     #[arg(long)]
     pub stereo: bool,
-    /// auto (VideoToolbox on macOS, else nvenc→vaapi→amf→qsv; then software) | videotoolbox | nvenc | vaapi | amf | qsv | x264 | FFmpeg name
+    /// auto (VideoToolbox on macOS, else nvenc→vaapi→amf→qsv; then software) | videotoolbox | nvenc | vaapi | amf | qsv | x264 (h264 only) | x265 (hevc only) | FFmpeg name
     #[arg(long, default_value = "auto")]
     pub encoder: String,
     /// VAAPI render node (GPU conversion, VAAPI encode)
@@ -193,7 +204,7 @@ pub struct Args {
     /// stretch instead of letterboxing (black bars, aspect kept)
     #[arg(long)]
     pub no_letterbox: bool,
-    /// scale CPU frames (x11/test/file) with swscale instead of VAAPI
+    /// Use CPU scaling instead of VAAPI; on macOS also force BGRA capture/readback
     #[arg(long)]
     pub cpu_scale: bool,
     /// GPU scaler quality: hq | fast | default
@@ -242,20 +253,35 @@ fn parse_rate(s: &str) -> Result<u64, String> {
         Some('m') => (&s[..s.len() - 1], 1e6),
         _ => (s, 1.0),
     };
-    n.parse::<f64>().map(|v| (v * mul) as u64).map_err(|_| format!("bad rate {s}"))
+    n.parse::<f64>()
+        .map(|v| (v * mul) as u64)
+        .map_err(|_| format!("bad rate {s}"))
 }
 
 fn parse_size(s: &str) -> Result<(u32, u32), String> {
-    let (w, h) = s.split_once('x').ok_or_else(|| format!("bad size {s} (WxH)"))?;
-    Ok((w.parse().map_err(|_| "bad width")?, h.parse().map_err(|_| "bad height")?))
+    let (w, h) = s
+        .split_once('x')
+        .ok_or_else(|| format!("bad size {s} (WxH)"))?;
+    Ok((
+        w.parse().map_err(|_| "bad width")?,
+        h.parse().map_err(|_| "bad height")?,
+    ))
 }
 
 #[allow(dead_code)]
 fn parse_region(s: &str) -> Result<(u32, u32, i32, i32), String> {
     let mut it = s.split('+');
     let (w, h) = parse_size(it.next().unwrap_or(""))?;
-    let x = it.next().unwrap_or("0").parse().map_err(|_| "bad region x")?;
-    let y = it.next().unwrap_or("0").parse().map_err(|_| "bad region y")?;
+    let x = it
+        .next()
+        .unwrap_or("0")
+        .parse()
+        .map_err(|_| "bad region x")?;
+    let y = it
+        .next()
+        .unwrap_or("0")
+        .parse()
+        .map_err(|_| "bad region y")?;
     Ok((w, h, x, y))
 }
 
@@ -335,7 +361,10 @@ fn limit_privileges(a: &Args) -> Result<(), String> {
         inheritable: u32,
     }
     const V3: u32 = 0x2008_0522;
-    let mut h = Hdr { version: V3, pid: 0 };
+    let mut h = Hdr {
+        version: V3,
+        pid: 0,
+    };
     let mut d = [Data::default(); 2];
     let r = unsafe { libc::syscall(libc::SYS_capget, &mut h as *mut Hdr, d.as_mut_ptr()) };
     let has_caps = r == 0 && (d[0].permitted != 0 || d[1].permitted != 0);
@@ -345,19 +374,26 @@ fn limit_privileges(a: &Args) -> Result<(), String> {
     let kms = a.source == "kms" && !a.kms_simulate && !a.no_video;
     if kms || a.list {
         if a.vf.is_some() {
-            return Err("--vf is refused while running with CAP_SYS_ADMIN (it can load plugin code)".into());
+            return Err(
+                "--vf is refused while running with CAP_SYS_ADMIN (it can load plugin code)".into(),
+            );
         }
         return Ok(());
     }
-    let mut h = Hdr { version: V3, pid: 0 };
+    let mut h = Hdr {
+        version: V3,
+        pid: 0,
+    };
     let z = [Data::default(); 2];
     let r = unsafe { libc::syscall(libc::SYS_capset, &mut h as *mut Hdr, z.as_ptr()) };
     if r != 0 {
-        return Err(format!("dropping capabilities failed: {}", std::io::Error::last_os_error()));
+        return Err(format!(
+            "dropping capabilities failed: {}",
+            std::io::Error::last_os_error()
+        ));
     }
     Ok(())
 }
-
 
 /// Where to connect: the goggles' USB network if usable (see `--transport`), else the
 /// `adb forward` end (`--host`, 127.0.0.1).
@@ -382,7 +418,11 @@ fn pick_usb_net(a: &Args, strict: bool, log: &dyn Fn(String)) -> Result<String, 
     let wait = Duration::from_secs(if strict { 15 } else { 4 });
     match net::wait_usb_net(wait) {
         Some(n) if n.configured => {
-            log(format!("data link: goggles' USB network ({} → {})", n.ifname, net::GOGGLES_ADDR));
+            log(format!(
+                "data link: goggles' USB network ({} → {})",
+                n.ifname,
+                net::GOGGLES_ADDR
+            ));
             Ok(net::GOGGLES_ADDR.into())
         }
         Some(n) => {
@@ -415,7 +455,10 @@ fn pick_usb_net(a: &Args, strict: bool, log: &dyn Fn(String)) -> Result<String, 
     use eyepiece_link::net;
     let wait = Duration::from_secs(if strict { 20 } else { 6 });
     if net::wait_goggles_reachable(wait) {
-        log(format!("data link: goggles' USB network ({})", net::GOGGLES_ADDR));
+        log(format!(
+            "data link: goggles' USB network ({})",
+            net::GOGGLES_ADDR
+        ));
         return Ok(net::GOGGLES_ADDR.into());
     }
     let why = if cfg!(target_os = "macos") {
@@ -429,7 +472,9 @@ fn pick_usb_net(a: &Args, strict: bool, log: &dyn Fn(String)) -> Result<String, 
     if strict {
         return Err(msg);
     }
-    log(format!("NOTICE: {msg}. Using adb. Turn off \"USB network\" (--transport adb) to skip this check."));
+    log(format!(
+        "NOTICE: {msg}. Using adb. Turn off \"USB network\" (--transport adb) to skip this check."
+    ));
     Ok(a.host.clone())
 }
 
@@ -473,7 +518,9 @@ pub fn prepare(a: &Args, log: &LogFn) -> Result<Option<Prepared>, String> {
     let sync: SyncMode = a.sync.parse()?;
     let mut opts = vec![];
     for kv in &a.enc_opt {
-        let (k, v) = kv.split_once('=').ok_or_else(|| format!("--enc-opt {kv}: want KEY=VALUE"))?;
+        let (k, v) = kv
+            .split_once('=')
+            .ok_or_else(|| format!("--enc-opt {kv}: want KEY=VALUE"))?;
         opts.push((k.to_string(), v.to_string()));
     }
     // the 3D display timing refreshes at ~60 Hz
@@ -498,17 +545,28 @@ pub fn prepare(a: &Args, log: &LogFn) -> Result<Option<Prepared>, String> {
     if !a.no_connect {
         if !a.no_deploy {
             let bridge = a.bridge.clone().or_else(find_bridge);
-            adb.deploy(bridge.as_deref(), &a.bridge_args, a.transport != "adb", &**log)?;
+            adb.deploy(
+                bridge.as_deref(),
+                &a.bridge_args,
+                a.transport != "adb",
+                &**log,
+            )?;
         } else if !a.no_forward && !adb.bridge_running() {
-            log("no eyepiece_bridge running on the goggles: start Eyepiece from the goggles' menu \
+            log(
+                "no eyepiece_bridge running on the goggles: start Eyepiece from the goggles' menu \
                  (natartos), or use --deploy"
-                .into());
+                    .into(),
+            );
         }
         if !a.no_forward {
             adb.forward(a.port, a.port)?;
         }
     }
-    let host = if a.no_connect { a.host.clone() } else { pick_host(a, &**log)? };
+    let host = if a.no_connect {
+        a.host.clone()
+    } else {
+        pick_host(a, &**log)?
+    };
     let link = (!a.no_connect).then(|| LinkOptions {
         addr: format!("{}:{}", host, a.port),
         connect_timeout: Duration::from_secs(15),
@@ -543,7 +601,11 @@ pub fn prepare(a: &Args, log: &LogFn) -> Result<Option<Prepared>, String> {
         duration_s: a.duration,
         stereo: a.stereo,
     };
-    Ok(Some(Prepared { cfg, deployed: !a.no_deploy && !a.no_connect, adb }))
+    Ok(Some(Prepared {
+        cfg,
+        deployed: !a.no_deploy && !a.no_connect,
+        adb,
+    }))
 }
 
 /// Run the session (blocks until it ends), then the post-session safety step of `--deploy`.
@@ -561,7 +623,9 @@ pub fn run_prepared(p: Prepared, ctl: Arc<Control>, ev: Events) -> Result<(), St
 }
 
 fn real_main(a: Args, log: LogFn) -> Result<(), String> {
-    let Some(prepared) = prepare(&a, &log)? else { return Ok(()) };
+    let Some(prepared) = prepare(&a, &log)? else {
+        return Ok(());
+    };
 
     let ctl = Arc::new(Control::default());
     {
@@ -605,5 +669,31 @@ fn real_main(a: Args, log: LogFn) -> Result<(), String> {
         }
     }
     let lg = log.clone();
-    run_prepared(prepared, ctl, Events::new(log, Arc::new(move |s| lg(s.line()))))
+    run_prepared(
+        prepared,
+        ctl,
+        Events::new(log, Arc::new(move |s| lg(s.line()))),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_encoder_selection_and_tuning_match_reference() {
+        let args = Args::default();
+        assert_eq!(args.encoder, "auto");
+        assert_eq!(args.codec, DEFAULT_CODEC);
+        assert_eq!(args.bitrate, "20M");
+        assert_eq!(args.slices, 4);
+        assert_eq!(args.vbv_frames, 4.0);
+        assert_eq!(args.gop, 0);
+        assert!(!args.cpu_scale);
+        assert!(!args.no_letterbox);
+        assert!(args.preset.is_none());
+        assert!(args.tune.is_none());
+        assert!(args.profile.is_none());
+        assert!(args.enc_opt.is_empty());
+    }
 }

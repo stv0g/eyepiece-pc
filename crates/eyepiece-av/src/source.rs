@@ -30,6 +30,8 @@ pub struct CaptureSource {
     cap: Box<dyn Capture>,
     #[cfg(target_os = "linux")]
     drm: Option<DrmFrames>,
+    #[cfg(target_os = "macos")]
+    videotoolbox: Option<crate::hw::VideoToolboxFrames>,
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     drm_device: String,
 }
@@ -40,6 +42,8 @@ impl CaptureSource {
             cap,
             #[cfg(target_os = "linux")]
             drm: None,
+            #[cfg(target_os = "macos")]
+            videotoolbox: None,
             drm_device: drm_device.into(),
         }
     }
@@ -54,6 +58,13 @@ impl Source for CaptureSource {
                     self.drm = Some(DrmFrames::new(&self.drm_device)?);
                 }
                 self.drm.as_mut().unwrap().wrap(d)?
+            }
+            #[cfg(target_os = "macos")]
+            FrameData::PixelBuffer(pixels) => {
+                if self.videotoolbox.is_none() {
+                    self.videotoolbox = Some(crate::hw::VideoToolboxFrames::new()?);
+                }
+                self.videotoolbox.as_mut().unwrap().wrap(pixels)?
             }
             FrameData::Cpu(c) => wrap_cpu(c)?,
         };

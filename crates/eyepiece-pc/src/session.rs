@@ -120,7 +120,7 @@ impl Events {
     }
 }
 
-fn make_source(cfg: &Config) -> Result<Box<dyn Source>, String> {
+fn make_source(cfg: &Config, _encoder_family: encoder::Family) -> Result<Box<dyn Source>, String> {
     let fps = cfg.enc.fps as f64;
     Ok(match &cfg.source {
         #[cfg(target_os = "linux")]
@@ -166,7 +166,13 @@ fn make_source(cfg: &Config) -> Result<Box<dyn Source>, String> {
         }
         #[cfg(target_os = "macos")]
         SourceKind::ScreenCaptureKit { display_id, cursor } => {
-            let capture = eyepiece_capture::screencapturekit::ScreenCapture::open(*display_id, cfg.enc.fps, *cursor)?;
+            let capture = if _encoder_family == encoder::Family::VideoToolbox && cfg.vf.is_none() && cfg.gpu_scale_cpu_input {
+                eyepiece_capture::screencapturekit::ScreenCapture::open_native(
+                    *display_id, cfg.enc.fps, *cursor, (cfg.enc.width, cfg.enc.height), cfg.letterbox,
+                )?
+            } else {
+                eyepiece_capture::screencapturekit::ScreenCapture::open(*display_id, cfg.enc.fps, *cursor)?
+            };
             Box::new(eyepiece_av::CaptureSource::new(Box::new(capture), ""))
         }
         SourceKind::Test { lavfi } => {
@@ -223,8 +229,11 @@ pub fn run(mut cfg: Config, ctl: Arc<Control>, ev: Events) -> Result<(), String>
     let log = ev.log.clone();
     let pc_stats = Arc::new(Mutex::new(Interval::default()));
 
+    let enc_name = if cfg.video { encoder::resolve(&cfg.enc.encoder, cfg.enc.codec, &cfg.enc.vaapi_device)? } else { String::new() };
+    let family = encoder::family(&enc_name);
+
     // ---- source first: its refresh rate decides the real frame rate ----
-    let mut src = if cfg.video { Some(make_source(&cfg)?) } else { None };
+    let mut src = if cfg.video { Some(make_source(&cfg, family)?) } else { None };
     if let Some(s) = &src {
         log(format!("source: {}", s.describe()));
         if let Some(r) = s.refresh_hz() {
@@ -240,9 +249,6 @@ pub fn run(mut cfg: Config, ctl: Arc<Control>, ev: Events) -> Result<(), String>
             }
         }
     }
-    let enc_name = if cfg.video { encoder::resolve(&cfg.enc.encoder, cfg.enc.codec, &cfg.enc.vaapi_device)? } else { String::new() };
-    let family = encoder::family(&enc_name);
-
     let link: Arc<Mutex<Option<Arc<Link>>>> = Arc::new(Mutex::new(connect(&cfg, &cfg.enc, &ev)?));
 
     // ---- stats thread ----

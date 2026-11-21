@@ -3,7 +3,8 @@
 //! display (DRM vblank, PipeWire buffer arrival, DXGI present time), not when we got
 //! around to reading it.
 //!
-//! Frames are either GPU buffers (DMA-BUF, zero-copy into VAAPI) or CPU images.
+//! Frames are GPU buffers (DMA-BUF into VAAPI, native macOS pixel buffers into
+//! VideoToolbox) or CPU images.
 //! No backend queues frames: `next_frame` always returns the newest content.
 
 #[cfg(target_os = "linux")]
@@ -20,6 +21,7 @@ pub mod dxgi;
 pub mod screencapturekit;
 
 pub mod pacer;
+pub mod layout;
 
 #[cfg(target_os = "linux")]
 use std::os::fd::OwnedFd;
@@ -110,6 +112,8 @@ pub struct CpuImage {
 pub enum FrameData {
     #[cfg(target_os = "linux")]
     DmaBuf(DmaBuf),
+    #[cfg(target_os = "macos")]
+    PixelBuffer(screencapturekit::CVPixelBuffer),
     Cpu(CpuImage),
 }
 
@@ -128,6 +132,8 @@ impl Frame {
         match &self.data {
             #[cfg(target_os = "linux")]
             FrameData::DmaBuf(d) => (d.width, d.height),
+            #[cfg(target_os = "macos")]
+            FrameData::PixelBuffer(pixels) => (pixels.width() as u32, pixels.height() as u32),
             FrameData::Cpu(c) => (c.width, c.height),
         }
     }

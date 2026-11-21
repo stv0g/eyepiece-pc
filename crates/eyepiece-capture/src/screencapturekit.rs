@@ -1,7 +1,10 @@
 use crate::{Capture, CpuFormat, CpuImage, Frame, FrameData};
+use ::screencapturekit::cg::CGRect;
 use ::screencapturekit::cm::{CMSampleBufferExt, CMSampleBufferSCExt, SCFrameStatus};
+pub use ::screencapturekit::cv::CVPixelBuffer;
 use ::screencapturekit::cv::CVPixelBufferLockFlags;
 use ::screencapturekit::prelude::*;
+use ::screencapturekit::stream::configuration::color_matrix;
 use ::screencapturekit::stream::delegate_trait::ErrorHandler;
 use eyepiece_link::clock::mono_us;
 use std::sync::{Arc, Condvar, Mutex};
@@ -45,6 +48,9 @@ pub struct ScreenCapture {
     shared: Arc<Shared>,
     last: Option<CMSampleBuffer>,
     description: String,
+    native: bool,
+    frame_interval_us: u64,
+    last_frame_us: u64,
 }
 
 fn permission_error(error: impl std::fmt::Display) -> String {
@@ -67,6 +73,25 @@ pub fn list() -> Result<String, String> {
 
 impl ScreenCapture {
     pub fn open(display_id: Option<u32>, fps: u32, cursor: bool) -> Result<Self, String> {
+        Self::open_config(display_id, fps, cursor, None)
+    }
+
+    pub fn open_native(
+        display_id: Option<u32>,
+        fps: u32,
+        cursor: bool,
+        output: (u32, u32),
+        letterbox: bool,
+    ) -> Result<Self, String> {
+        Self::open_config(display_id, fps, cursor, Some((output, letterbox)))
+    }
+
+    fn open_config(
+        display_id: Option<u32>,
+        fps: u32,
+        cursor: bool,
+        output: Option<((u32, u32), bool)>,
+    ) -> Result<Self, String> {
         if fps == 0 || fps > i32::MAX as u32 {
             return Err("ScreenCaptureKit needs a positive frame rate below 2^31".into());
         }
@@ -83,13 +108,32 @@ impl ScreenCapture {
             .with_excluding_windows(&[])
             .build()
             .map_err(permission_error)?;
-        let configuration = SCStreamConfiguration::new()
+        let mut configuration = SCStreamConfiguration::new()
             .with_width(width)
             .with_height(height)
             .with_pixel_format(PixelFormat::BGRA)
             .with_shows_cursor(cursor)
             .with_queue_depth(3)
             .with_minimum_frame_interval(&CMTime::new(1, fps as i32));
+        if let Some((output, letterbox)) = output {
+            let rect = crate::layout::fit_rect((width, height), output, letterbox)?;
+            configuration = configuration
+                .with_width(output.0)
+                .with_height(output.1)
+                .with_pixel_format(PixelFormat::YCbCr_420v)
+                .with_scales_to_fit(true)
+                .with_destination_rect(CGRect::new(
+                    f64::from(rect.x),
+                    f64::from(rect.y),
+                    f64::from(rect.width),
+                    f64::from(rect.height),
+                ))
+                .with_background_color(0.0, 0.0, 0.0)
+                .with_color_space_name("kCGColorSpaceITUR_709")
+                .map_err(|error| error.to_string())?
+                .with_color_matrix(color_matrix::ITU_R_709_2)
+                .map_err(|error| error.to_string())?;
+        }
         let shared = Arc::new(Shared::default());
         let errors = shared.clone();
         let delegate = ErrorHandler::new(move |error| {
@@ -110,10 +154,33 @@ impl ScreenCapture {
             stream,
             shared,
             last: None,
-            description: format!(
-                "ScreenCaptureKit display {}: {width}x{height} BGRA, up to {fps} fps (CPU copy)",
-                display.display_id()
-            ),
+            description: match output {
+                Some((size, _)) => format!("ScreenCaptureKit display {}: {width}x{height} -> {}x{} NV12, up to {fps} fps (native surface; no CPU readback)", display.display_id(), size.0, size.1),
+                None => format!("ScreenCaptureKit display {}: {width}x{height} BGRA, up to {fps} fps (CPU copy)", display.display_id()),
+            },
+            native: output.is_some(),
+            frame_interval_us: 1_000_000 / u64::from(fps),
+            last_frame_us: 0,
+        })
+    }
+
+    fn frame_from_sample(&self, sample: &CMSampleBuffer, t_us: u64) -> Result<Frame, String> {
+        if !self.native {
+            return Self::copy_sample(sample, t_us);
+        }
+        let pixels = sample
+            .pixel_buffer()
+            .ok_or("ScreenCaptureKit sample has no pixel buffer")?;
+        if pixels.pixel_format() != u32::from_be_bytes(*b"420v")
+            || pixels.width() == 0
+            || pixels.height() == 0
+        {
+            return Err("ScreenCaptureKit did not deliver a video-range NV12 surface".into());
+        }
+        Ok(Frame {
+            t_us,
+            t_ready_us: mono_us(),
+            data: FrameData::PixelBuffer(pixels),
         })
     }
 
@@ -166,11 +233,20 @@ impl Capture for ScreenCapture {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        let force_wait = if force && self.last.is_some() {
+            Duration::from_micros(
+                self.last_frame_us
+                    .saturating_add(self.frame_interval_us)
+                    .saturating_sub(mono_us()),
+            )
+        } else {
+            Duration::from_millis(100)
+        };
         let (mut state, _) = self
             .shared
             .changed
-            .wait_timeout_while(state, Duration::from_millis(100), |state| {
-                state.latest.is_none() && state.error.is_none() && !(force && self.last.is_some())
+            .wait_timeout_while(state, force_wait, |state| {
+                state.latest.is_none() && state.error.is_none()
             })
             .unwrap_or_else(|error| error.into_inner());
         if let Some(error) = &state.error {
@@ -180,11 +256,13 @@ impl Capture for ScreenCapture {
         drop(state);
         if let Some((sample, timestamp)) = latest {
             self.last = Some(sample.clone());
-            return Self::copy_sample(&sample, timestamp).map(Some);
+            self.last_frame_us = mono_us();
+            return self.frame_from_sample(&sample, timestamp).map(Some);
         }
         if force {
             if let Some(sample) = &self.last {
-                return Self::copy_sample(sample, mono_us()).map(Some);
+                self.last_frame_us = mono_us();
+                return self.frame_from_sample(sample, self.last_frame_us).map(Some);
             }
         }
         Ok(None)
