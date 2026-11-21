@@ -1,0 +1,9 @@
+[package]
+name = "eyepiece-xr"
+description = "Bridge eyepiece-pc's opentrack pose output into Monado's remote driver (OpenXR on Linux), std only"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
