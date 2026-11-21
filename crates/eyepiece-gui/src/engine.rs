@@ -34,6 +34,8 @@ pub struct EngineShared {
     pub phase: Mutex<Phase>,
     /// "encoder: …" / "source: …" / "convert: …" lines, for pins
     pub facts: Mutex<Vec<String>>,
+    /// last "NOTICE: …" log line (something the user should do, e.g. connect the USB network)
+    pub notice: Mutex<Option<String>>,
 }
 
 pub struct Engine {
@@ -53,6 +55,7 @@ impl Engine {
             link: Mutex::new(None),
             phase: Mutex::new(Phase::Preparing),
             facts: Mutex::new(vec![]),
+            notice: Mutex::new(None),
         });
         let log: LogFn = {
             let (sh, rp) = (shared.clone(), repaint.clone());
@@ -60,6 +63,9 @@ impl Engine {
                 eprintln!("[eyepiece-gui] {s}");
                 if ["source:", "encoder:", "convert:", "bridge v"].iter().any(|p| s.starts_with(p)) {
                     sh.facts.lock().unwrap().push(s.clone());
+                }
+                if let Some(n) = s.strip_prefix("NOTICE: ") {
+                    *sh.notice.lock().unwrap() = Some(n.to_string());
                 }
                 let mut l = sh.log.lock().unwrap();
                 l.push_back(s);
