@@ -153,9 +153,13 @@ A current `eyepiece_bridge` switches the goggles' USB once per boot to a USB net
 `192.168.60.1`; no default route, no DNS). `--transport auto` (default) streams over it
 when the PC side is connected, otherwise over `adb forward` and says so:
 
-- Connect the new wired network once in your network settings (automatic/DHCP, no
-  special options). The goggles' MAC is fixed, so it is always the same interface
-  (`enx026579650001`) and a saved connection keeps working.
+- Linux: set up the new wired network once as a **saved connection with "connect
+  automatically"** (IPv4 automatic/DHCP, no special options). The goggles' MAC is fixed,
+  so it is always the same interface (`enx026579650001`) and the saved connection keeps
+  working. The goggles re-enumerate on the first start after every boot, so a one-off
+  connect (e.g. `nmcli device connect`, which saves no profile) is not brought back up;
+  with NetworkManager:
+  `nmcli connection add type ethernet ifname enx026579650001 con-name eyepiece ipv4.method auto ipv6.method ignore connection.autoconnect yes`.
 - Measured: capture→shown p50 about 11 ms instead of 13–15 ms with adb, link round
   trip 0.2 ms instead of 2–5 ms, steadier head-pose delivery.
 - `--transport adb` (GUI: *USB network* off) forces the old path and does not switch the

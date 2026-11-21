@@ -382,9 +382,9 @@ fn pick_usb_net(a: &Args, strict: bool, log: &dyn Fn(String)) -> Result<String, 
         }
         Some(n) => {
             let msg = format!(
-                "the goggles' USB network ({}) is not connected on this PC. Connect it once in your \
-                 network settings (wired connection, automatic/DHCP: the goggles hand out the \
-                 address) for ~2–4 ms lower latency",
+                "the goggles' USB network ({}) is not connected on this PC. Add it once in your \
+                 network settings as a wired connection with \"connect automatically\" on \
+                 (automatic/DHCP: the goggles hand out the address) for ~2–4 ms lower latency",
                 n.ifname
             );
             if strict {
