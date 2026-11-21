@@ -29,6 +29,11 @@ Download from the GitHub releases page:
   (libavcodec 63). It needs the FFmpeg 9 runtime libraries (`libavcodec63`, `libavfilter12`,
   `libavformat63`, `libavutil61`) and libdrm; on distributions with another FFmpeg major,
   build from source. `BUILD-INFO.txt` says whether the PipeWire capture feature is included.
+- `eyepiece-pc-<version>-linux-x86_64.AppImage` — the GUI (and the CLI: start it through a
+  symlink named `eyepiece-pc`) with FFmpeg 9 bundled, for distributions with glibc 2.35 or
+  newer (Ubuntu 22.04, Debian 12, Fedora 36 and later). No KMS screen capture from the
+  AppImage (it cannot hold the capability): use PipeWire/X11 capture or the tar.gz.
+  NVENC needs NVIDIA driver 530 or newer; AMF and QSV are not included.
 - `eyepiece-pc-<version>-windows-x86_64.zip` (`eyepiece-pc.exe` + `eyepiece-gui.exe`) — includes the FFmpeg DLLs (BtbN shared build).
   **The Windows (DXGI capture) path is untested.**
 
@@ -257,7 +262,10 @@ End to end with KMS capture, capture→shown on the goggles is about 13–14 ms 
 `packaging/linux/build-appimage.sh` builds an AppImage with both programs (a symlink named
 `eyepiece-pc` to the AppImage starts the CLI). It needs
 [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy); without it the script stops after
-assembling the AppDir. It bundles the FFmpeg libraries but takes glibc, the GPU driver
+assembling the AppDir. For a portable AppImage, build FFmpeg on an old base first with
+`packaging/linux/build-ffmpeg.sh PREFIX` and point `FFMPEG_INCLUDE_DIR`, `FFMPEG_LIB_DIR` and
+`LD_LIBRARY_PATH` at it (this is what CI does on Ubuntu 22.04). `packaging/linux/build-appimage-docker.sh` runs
+exactly that in an `ubuntu:22.04` container (needs only docker or podman). It bundles the FFmpeg libraries but takes glibc, the GPU driver
 stack (libva, libvdpau, NVIDIA/CUDA, OpenCL, Vulkan, GL), libdrm, PipeWire and the windowing
 libraries from the host. An AppImage cannot carry file capabilities, so KMS capture does not
 work from it (use PipeWire or X11 capture, or a native install with `setcap`).

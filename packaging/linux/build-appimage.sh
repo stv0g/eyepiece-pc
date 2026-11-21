@@ -3,6 +3,12 @@
 #
 #   packaging/linux/build-appimage.sh [--features pipewire]
 #
+# Portable build (what CI does): on an old base (Ubuntu 22.04, glibc 2.35) build FFmpeg with
+# build-ffmpeg.sh, then
+#   FFMPEG_INCLUDE_DIR=$P/include FFMPEG_LIB_DIR=$P/lib LD_LIBRARY_PATH=$P/lib build-appimage.sh
+# Built against the system FFmpeg instead, the AppImage needs a glibc as new as the build
+# machine's.
+#
 # Needs linuxdeploy (https://github.com/linuxdeploy/linuxdeploy, the x86_64 AppImage; it
 # includes the AppImage output plugin): on PATH as linuxdeploy / linuxdeploy-x86_64.AppImage,
 # or LINUXDEPLOY=/path/to/linuxdeploy-x86_64.AppImage. Without it the AppDir is still built
@@ -25,7 +31,7 @@ TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 
 cargo build --release --locked -p eyepiece-gui -p eyepiece-pc "$@"
 
-OUT="$ROOT/target/appimage"
+OUT="$TARGET/appimage"
 APPDIR="$OUT/AppDir"
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/scalable/apps"
@@ -67,7 +73,9 @@ fi
 cd "$OUT"
 VERSION="${VERSION:-$(git -C "$ROOT" describe --tags --always 2>/dev/null || echo dev)}"
 export VERSION
-export LDAI_OUTPUT="eyepiece-$VERSION-x86_64.AppImage"
+export LDAI_OUTPUT="eyepiece-pc-$VERSION-linux-x86_64.AppImage"
+# no FUSE needed (containers, CI)
+export APPIMAGE_EXTRACT_AND_RUN=1
 "$LD" --appdir "$APPDIR" \
     --executable "$APPDIR/usr/bin/eyepiece-gui" \
     --executable "$APPDIR/usr/bin/eyepiece-pc" \

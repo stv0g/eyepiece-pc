@@ -65,6 +65,52 @@ jobs:
           name: linux
           path: dist/*.tar.gz
 
+  # AppImage: built on an old base so it runs on older distributions (glibc 2.35+: Ubuntu
+  # 22.04, Debian 12, Fedora 36 and newer). Ubuntu 22.04 ships FFmpeg 4.4, so FFmpeg 9 is
+  # built from source and bundled. KMS capture does not work from an AppImage (no file
+  # capabilities): that is what the tar.gz is for.
+  appimage:
+    runs-on: ubuntu-22.04
+    env:
+      LINUXDEPLOY_VERSION: 1-alpha-20251107-1
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config clang libclang-dev nasm libx264-dev libva-dev libdrm-dev file
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: appimage
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg
+          key: ffmpeg-ubuntu22-${{ hashFiles('packaging/linux/build-ffmpeg.sh') }}
+      - name: Build FFmpeg
+        run: |
+          [ -f "$RUNNER_TEMP/ffmpeg/lib/libavcodec.so" ] || packaging/linux/build-ffmpeg.sh "$RUNNER_TEMP/ffmpeg"
+          rm -rf "$RUNNER_TEMP/ffmpeg/src"
+      - name: Fetch linuxdeploy
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/linuxdeploy-x86_64.AppImage" \
+            "https://github.com/linuxdeploy/linuxdeploy/releases/download/$LINUXDEPLOY_VERSION/linuxdeploy-x86_64.AppImage"
+          chmod +x "$RUNNER_TEMP/linuxdeploy-x86_64.AppImage"
+      - name: Build AppImage
+        shell: bash
+        run: |
+          case "$GITHUB_REF" in refs/tags/*) ver="$GITHUB_REF_NAME" ;; *) ver="${GITHUB_SHA::7}" ;; esac
+          export VERSION="$ver" LINUXDEPLOY="$RUNNER_TEMP/linuxdeploy-x86_64.AppImage"
+          export FFMPEG_INCLUDE_DIR="$RUNNER_TEMP/ffmpeg/include" FFMPEG_LIB_DIR="$RUNNER_TEMP/ffmpeg/lib"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/ffmpeg/lib"
+          packaging/linux/build-appimage.sh
+          mkdir -p dist && mv target/appimage/*.AppImage dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: dist/*.AppImage
+
   windows:
     runs-on: windows-latest
     steps:
@@ -106,7 +152,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, windows]
+    needs: [linux, appimage, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -119,5 +165,6 @@ jobs:
         with:
           files: |
             dist/*.tar.gz
+            dist/*.AppImage
             dist/*.zip
           generate_release_notes: true
