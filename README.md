@@ -201,12 +201,17 @@ and only the main choices:
 - **Quality**: *Low latency* (H.264, 20 Mbit/s, the default), *High quality* (H.265,
   30 Mbit/s: sharper, about 1 ms more encode time), *Low bandwidth* (H.265, 8 Mbit/s). They
   set codec and bitrate only; anything else shows as *Custom*.
-- **Head tracking** on/off (to opentrack) and Recenter; **Preview** on/off.
+- **Head tracking** on/off (to opentrack, off by default) and Recenter; while it is on, a
+  small 3D view of the head pose.
+- **Connection**: *USB network (faster)*, on by default (see [USB network](#usb-network-lower-latency-than-adb));
+  off = adb only.
+- **Preview** on/off.
 
 *Full view* switches to everything below (and *Simple view* back); both edit the same
 settings.
 
-- **Left panel**: source and output, bridge (start / use running), encoder, bitrate,
+- **Left panel**: source and output, bridge (start / use running), data link (USB network
+  / adb, the same setting as *Connection* in the simple view), encoder, bitrate,
   fps, Start/Stop, head tracking on/off, Recenter, Force IDR, preview on/off.
 - **Overview**: the preview (the encoded stream decoded in-process: what the goggles get,
   artifacts included), the head pose as a small 3D view with yaw/pitch/roll, and the
