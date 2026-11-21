@@ -65,13 +65,24 @@ pub fn video_prefix(pts_us: u64, codec: u8) -> [u8; 12] {
     b
 }
 
+/// ep_stream_t.layout: mono, or both eyes side by side (2560x720, the goggles' 3D mode).
+pub const EP_LAYOUT_MONO: u8 = 0;
+pub const EP_LAYOUT_SBS: u8 = 1;
+/// One eye of a side-by-side stream (the 3D display timing; no scaler on the goggles).
+pub const SBS_EYE_W: u32 = 1280;
+pub const SBS_EYE_H: u32 = 720;
+/// ep_info_t.flags: the bridge understands EP_LAYOUT_SBS.
+pub const EP_INFO_STEREO: u8 = 0x01;
+
 /// ep_stream_t: must precede the video (the hardware decoder sizes its buffers from it).
-pub fn stream_payload(width: u16, height: u16, codec: u8, fps: u32) -> [u8; 8] {
+/// Sent once per connection.
+pub fn stream_payload(width: u16, height: u16, codec: u8, fps: u32, layout: u8) -> [u8; 8] {
     let mut b = [0u8; 8];
     b[..2].copy_from_slice(&width.to_le_bytes());
     b[2..4].copy_from_slice(&height.to_le_bytes());
     b[4] = codec;
     b[5] = fps.min(255) as u8;
+    b[6] = layout;
     b
 }
 
@@ -128,6 +139,8 @@ pub struct Info {
     pub fb_h: u16,
     pub decoder: u8,
     pub headtrack: u8,
+    /// EP_INFO_* capabilities (0 from older bridges)
+    pub flags: u8,
 }
 impl Info {
     pub fn parse(p: &[u8]) -> Option<Info> {
@@ -137,6 +150,7 @@ impl Info {
             fb_h: u16le(p, 6),
             decoder: p[8],
             headtrack: p[9],
+            flags: p[10],
         })
     }
     pub fn decoder_name(&self) -> &'static str {
@@ -159,7 +173,7 @@ mod tests {
     }
     #[test]
     fn stream_layout() {
-        let s = stream_payload(1920, 1080, EP_CODEC_H264, 100);
+        let s = stream_payload(1920, 1080, EP_CODEC_H264, 100, EP_LAYOUT_MONO);
         assert_eq!(s, [0x80, 0x07, 0x38, 0x04, 0, 100, 0, 0]);
     }
 }

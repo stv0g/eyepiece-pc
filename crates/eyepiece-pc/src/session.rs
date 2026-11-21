@@ -16,6 +16,7 @@ use eyepiece_av::encoder;
 use eyepiece_av::{ConvertConfig, Converter, Encoder, EncoderConfig, Packet, Source};
 use eyepiece_capture::SyncMode;
 use eyepiece_link::clock::mono_us;
+use eyepiece_link::proto;
 use eyepiece_link::stats::{Interval, Snapshot};
 use eyepiece_link::{Link, LinkOptions, LogFn};
 
@@ -61,6 +62,19 @@ pub struct Config {
     pub stats_interval: f64,
     pub max_frames: Option<u64>,
     pub duration_s: Option<f64>,
+    /// side-by-side stereo (2560x720, the goggles' 3D mode) instead of 1920x1080 mono
+    pub stereo: bool,
+}
+
+impl Config {
+    /// Encoded frame size: the panel (mono), or both eyes side by side (stereo).
+    pub fn frame_size(&self) -> (u32, u32) {
+        if self.stereo {
+            (2 * proto::SBS_EYE_W, proto::SBS_EYE_H)
+        } else {
+            (PANEL_W, PANEL_H)
+        }
+    }
 }
 
 /// Remote control for a running session (CLI stdin, a UI, signals).
@@ -149,7 +163,16 @@ fn make_source(cfg: &Config) -> Result<Box<dyn Source>, String> {
             Box::new(eyepiece_av::CaptureSource::new(Box::new(d), ""))
         }
         SourceKind::Test { lavfi } => {
-            Box::new(eyepiece_av::TestSource::new(PANEL_W, PANEL_H, cfg.enc.fps, lavfi.as_deref())?)
+            let (w, h) = cfg.frame_size();
+            // stereo test pattern: the same scene per eye, the right eye mirrored, so a
+            // swapped or duplicated eye is obvious
+            let sbs = format!(
+                "testsrc2=size={}x{h}:rate={},split[l][r];[r]hflip[rf];[l][rf]hstack=inputs=2",
+                w / 2,
+                cfg.enc.fps
+            );
+            let lavfi = lavfi.clone().or(cfg.stereo.then_some(sbs));
+            Box::new(eyepiece_av::TestSource::new(w, h, cfg.enc.fps, lavfi.as_deref())?)
         }
         SourceKind::File { path } => Box::new(eyepiece_av::FileSource::new(path, cfg.enc.fps)?),
     })
@@ -169,7 +192,21 @@ fn connect(cfg: &Config, enc: &EncoderConfig, ev: &Events) -> Result<Option<Arc<
     let l = Link::connect(lo, ev.log.clone())?;
     (ev.log)(format!("connected to eyepiece_bridge via {}", lo.addr));
     if cfg.video {
-        l.send_stream(PANEL_W as u16, PANEL_H as u16, enc.codec.wire(), enc.fps).map_err(|e| e.to_string())?;
+        if cfg.stereo {
+            // EP_INFO comes right after the connect: only stereo-capable bridges get SBS
+            let t0 = std::time::Instant::now();
+            while l.info().is_none() && t0.elapsed() < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            if l.info().is_none_or(|i| i.flags & proto::EP_INFO_STEREO == 0) {
+                return Err("this eyepiece_bridge has no stereo support (needs natartos \
+                            v0.1.0-eyepiece.5 or newer, or --bridge with a current build)"
+                    .into());
+            }
+        }
+        let (w, h) = cfg.frame_size();
+        let layout = if cfg.stereo { proto::EP_LAYOUT_SBS } else { proto::EP_LAYOUT_MONO };
+        l.send_stream(w as u16, h as u16, enc.codec.wire(), enc.fps, layout).map_err(|e| e.to_string())?;
     }
     ev.link_changed(Some(l.clone()));
     Ok(Some(l))
@@ -253,9 +290,10 @@ pub fn run(mut cfg: Config, ctl: Arc<Control>, ev: Events) -> Result<(), String>
         _ => None,
     };
 
+    let (frame_w, frame_h) = cfg.frame_size();
     let convert_cfg = ConvertConfig {
-        width: PANEL_W,
-        height: PANEL_H,
+        width: frame_w,
+        height: frame_h,
         letterbox: cfg.letterbox,
         target: encoder::target_for(family),
         vaapi_device: cfg.enc.vaapi_device.clone(),

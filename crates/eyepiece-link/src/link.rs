@@ -192,8 +192,13 @@ impl Link {
         Ok(())
     }
 
-    pub fn send_stream(&self, w: u16, h: u16, codec: u8, fps: u32) -> std::io::Result<()> {
-        self.send(EP_STREAM, 0, &stream_payload(w, h, codec, fps))
+    /// The bridge's EP_INFO (arrives right after connecting; None until then).
+    pub fn info(&self) -> Option<Info> {
+        *self.shared.info.lock().unwrap()
+    }
+
+    pub fn send_stream(&self, w: u16, h: u16, codec: u8, fps: u32, layout: u8) -> std::io::Result<()> {
+        self.send(EP_STREAM, 0, &stream_payload(w, h, codec, fps, layout))
     }
     pub fn recenter(&self) -> std::io::Result<()> {
         self.send(EP_CTRL, 0, &[EP_OP_RECENTER])
