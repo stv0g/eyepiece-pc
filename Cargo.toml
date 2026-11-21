@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/eyepiece-link", "crates/eyepiece-capture", "crates/eyepiece-av", "crates/eyepiece-pc", "crates/eyepiece-gui"]
+members = ["crates/eyepiece-link", "crates/eyepiece-capture", "crates/eyepiece-av", "crates/eyepiece-pc", "crates/eyepiece-gui", "crates/eyepiece-xr"]
 
 [workspace.package]
 version = "0.2.0"
