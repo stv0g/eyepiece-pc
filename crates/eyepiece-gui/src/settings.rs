@@ -309,7 +309,12 @@ mod tests {
         let a = Args::try_parse_from([
             "eyepiece-pc",
             "--source",
-            "test",
+            "screencapturekit",
+            "--display-id",
+            "2",
+            "--encoder",
+            "videotoolbox",
+            "--stereo",
             "--bitrate",
             "30M",
             "--head-tracking",

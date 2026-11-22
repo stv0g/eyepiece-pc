@@ -168,7 +168,7 @@ fn make_source(cfg: &Config, _encoder_family: encoder::Family) -> Result<Box<dyn
         SourceKind::ScreenCaptureKit { display_id, cursor } => {
             let capture = if _encoder_family == encoder::Family::VideoToolbox && cfg.vf.is_none() && cfg.gpu_scale_cpu_input {
                 eyepiece_capture::screencapturekit::ScreenCapture::open_native(
-                    *display_id, cfg.enc.fps, *cursor, (cfg.enc.width, cfg.enc.height), cfg.letterbox,
+                    *display_id, cfg.enc.fps, *cursor, cfg.frame_size(), cfg.letterbox,
                 )?
             } else {
                 eyepiece_capture::screencapturekit::ScreenCapture::open(*display_id, cfg.enc.fps, *cursor)?
