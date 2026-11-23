@@ -51,6 +51,10 @@ install -Dm755 eyepiece-pc-*/eyepiece-pc ~/.local/bin/eyepiece-pc
 
 ### Build from source
 
+With Nix, `nix build` builds the workspace binaries. The package supports Linux
+and Apple Silicon macOS; Intel macOS lacks a Swift 6 package in the pinned
+nixpkgs. `nix develop` provides a development shell.
+
 Linux (Debian/Ubuntu package names; FFmpeg 9 headers, tested with 9.0.2):
 
 ```sh
@@ -87,6 +91,9 @@ Swift compiler, for the capture crate's Swift bridge), current stable Rust and
 FFmpeg headers. The lockfile includes Edition 2024 dependencies; Cargo 1.83 is too old.
 This is source-build support, not a signed menu-bar app or an iOS app. No prebuilt
 macOS release is provided yet.
+
+The Intel macOS Nix development shell uses Swift 5.10 and the macOS 14 SDK,
+which are too old for the current `apple-metal` dependency.
 
 ```sh
 brew install rust ffmpeg pkg-config llvm android-platform-tools
