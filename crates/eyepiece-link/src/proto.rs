@@ -21,6 +21,10 @@ pub const EP_INFO: u8 = 0x85;
 /// Proposed addition (not sent by the current bridge): "I dropped data and wait for an
 /// IDR, send one now". Payload: u32 reason (0 = unspecified). Old PCs ignore unknown types.
 pub const EP_KEYREQ: u8 = 0x86;
+/// Goggles key transition: u64 device timestamp, u8 source, u8 pressed, u16 Linux key code.
+pub const EP_BUTTON: u8 = 0x87;
+pub const EP_BUTTON_SRC_GPIO_KEYS: u8 = 0;
+pub const EP_BUTTON_SRC_5D: u8 = 1;
 
 pub const EP_FLAG_KEY: u8 = 0x01;
 pub const EP_CODEC_H264: u8 = 0;
@@ -30,6 +34,8 @@ pub const EP_OP_QUIT: u8 = 2;
 /// + u8 on: the bridge starts/stops the goggles' MCU attitude stream (EP_POSE). Off until
 /// asked; the bridge turns it off again when the client disconnects.
 pub const EP_OP_HEADTRACK: u8 = 3;
+/// + u8 on: enable/disable Back-click and long-hold exit handling on the goggles.
+pub const EP_OP_BACK: u8 = 4;
 
 pub fn header(mtype: u8, flags: u8, len: u32) -> [u8; HDR_LEN] {
     let l = len.to_le_bytes();
@@ -162,6 +168,27 @@ impl Info {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ButtonEvent {
+    pub t_dev_us: u64,
+    pub source: u8,
+    pub pressed: bool,
+    pub code: u16,
+}
+impl ButtonEvent {
+    pub fn parse(p: &[u8]) -> Option<ButtonEvent> {
+        if p.len() < 12 || p[9] > 1 {
+            return None;
+        }
+        Some(ButtonEvent {
+            t_dev_us: u64le(p, 0),
+            source: p[8],
+            pressed: p[9] != 0,
+            code: u16le(p, 10),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,5 +202,15 @@ mod tests {
     fn stream_layout() {
         let s = stream_payload(1920, 1080, EP_CODEC_H264, 100, EP_LAYOUT_MONO);
         assert_eq!(s, [0x80, 0x07, 0x38, 0x04, 0, 100, 0, 0]);
+    }
+
+    #[test]
+    fn button_event_parses_press_and_release() {
+        let press = ButtonEvent::parse(&[1, 0, 0, 0, 0, 0, 0, 0, EP_BUTTON_SRC_5D, 1, 28, 0]).unwrap();
+        let release = ButtonEvent::parse(&[1, 0, 0, 0, 0, 0, 0, 0, EP_BUTTON_SRC_5D, 0, 28, 0]).unwrap();
+        assert!(press.pressed);
+        assert!(!release.pressed);
+        assert_eq!(press.code, 28);
+        assert_eq!(press.source, EP_BUTTON_SRC_5D);
     }
 }

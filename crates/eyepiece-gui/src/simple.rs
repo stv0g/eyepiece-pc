@@ -138,6 +138,8 @@ impl App {
                 ui.add_space(6.0);
                 let (st, col) = self.status_line();
                 ui.vertical_centered(|ui| ui.label(RichText::new(st).color(col)));
+                ui.add_space(6.0);
+                self.button_view(ui);
                 if let Some(n) = self.engine.as_ref().and_then(|e| e.shared.notice.lock().unwrap().clone()) {
                     egui::Frame::group(ui.style()).show(ui, |ui| {
                         ui.set_width(w - 16.0);

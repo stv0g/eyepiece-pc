@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub type LogFn = Arc<dyn Fn(String) + Send + Sync>;
+const BUTTON_EVENT_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Clone)]
 pub struct LinkOptions {
@@ -49,6 +50,7 @@ pub struct Shared {
     pub stats: Mutex<Interval>,
     pub info: Mutex<Option<Info>>,
     pub last_pose: Mutex<Option<Pose>>,
+    button_events: Mutex<VecDeque<ButtonEvent>>,
     key_request: AtomicBool,
     /// AUs sent since the last EP_FRAME, and when the first of them was sent
     unacked: AtomicU32,
@@ -124,6 +126,7 @@ impl Link {
             stats: Mutex::new(Interval::default()),
             info: Mutex::new(None),
             last_pose: Mutex::new(None),
+            button_events: Mutex::new(VecDeque::new()),
             key_request: AtomicBool::new(false),
             unacked: AtomicU32::new(0),
             t_first_unacked: AtomicU64::new(0),
@@ -207,8 +210,17 @@ impl Link {
     pub fn set_head_tracking(&self, on: bool) -> std::io::Result<()> {
         self.send(EP_CTRL, 0, &[EP_OP_HEADTRACK, on as u8])
     }
+    /// Enable or disable the goggles' Back-button exit behavior.
+    pub fn set_back_exit(&self, on: bool) -> std::io::Result<()> {
+        self.send(EP_CTRL, 0, &[EP_OP_BACK, on as u8])
+    }
     pub fn quit_bridge(&self) -> std::io::Result<()> {
         self.send(EP_CTRL, 0, &[EP_OP_QUIT])
+    }
+
+    /// Return all button transitions received since the last call.
+    pub fn take_button_events(&self) -> Vec<ButtonEvent> {
+        self.shared.button_events.lock().unwrap().drain(..).collect()
     }
 
     /// Bytes written but not yet taken by the peer (adb server / bridge): Linux SIOCOUTQ.
@@ -346,6 +358,14 @@ impl Link {
                 (sh.log)(format!("goggles: {m}"));
             }
             EP_KEYREQ => sh.key_request.store(true, Ordering::Relaxed),
+            EP_BUTTON => {
+                let Some(event) = ButtonEvent::parse(p) else { return };
+                let mut events = sh.button_events.lock().unwrap();
+                if events.len() == BUTTON_EVENT_QUEUE_CAPACITY {
+                    events.pop_front();
+                }
+                events.push_back(event);
+            }
             EP_INFO => {
                 let Some(i) = Info::parse(p) else { return };
                 (sh.log)(format!(

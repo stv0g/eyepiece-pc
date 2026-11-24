@@ -11,6 +11,8 @@ mod simple;
 use eframe::egui::{self, Color32, RichText, TextureHandle, TextureOptions};
 use eyepiece_pc::cli::Args;
 use eyepiece_pc::link::stats::Snapshot;
+use eyepiece_pc::link::proto::{EP_BUTTON_SRC_5D, EP_BUTTON_SRC_GPIO_KEYS};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -53,6 +55,9 @@ pub struct App {
     cmdline_edit: String,
     cmdline_err: Option<String>,
     status: Option<String>,
+    pressed_buttons: HashSet<(u8, u16)>,
+    back_exit_enabled: bool,
+    back_exit_link: Option<usize>,
     opts: Options,
     t_open: Instant,
     screenshot_sent: bool,
@@ -103,6 +108,7 @@ impl App {
             width: saved.ui.preview_width.into(),
         });
         let cmdline_edit = settings::command_line(&saved.args);
+        let back_exit_enabled = saved.args.no_deploy;
         let mut app = App {
             saved,
             config: opts.config.clone(),
@@ -120,6 +126,9 @@ impl App {
             cmdline_edit,
             cmdline_err: None,
             status,
+            pressed_buttons: HashSet::new(),
+            back_exit_enabled,
+            back_exit_link: None,
             opts,
             t_open: Instant::now(),
             screenshot_sent: false,
@@ -153,6 +162,8 @@ impl App {
         let repaint: Arc<dyn Fn() + Send + Sync> = Arc::new(move || c.request_repaint());
         self.save_now(); // the settings of every run are kept
         let mut args = self.saved.args.clone();
+        self.back_exit_enabled = args.no_deploy;
+        self.back_exit_link = None;
         // an ffplay window only if asked for in Advanced; the GUI has its own preview
         args.list = false;
         self.engine = Some(Engine::start(args, self.knobs.clone(), repaint));
@@ -218,6 +229,27 @@ impl App {
             selected: true,
         });
     }
+}
+
+fn button_keycap(ui: &mut egui::Ui, glyph: &str, name: &str, pressed: bool, width: f32) {
+    let fill = if pressed { Color32::from_rgb(48, 132, 91) } else { ui.visuals().widgets.inactive.bg_fill };
+    let stroke = if pressed {
+        egui::Stroke::new(1.0, Color32::from_rgb(110, 220, 155))
+    } else {
+        ui.visuals().widgets.inactive.bg_stroke
+    };
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(4.0)
+        .show(ui, |ui| {
+            ui.set_min_size(egui::vec2(width, 30.0));
+            ui.centered_and_justified(|ui| {
+                ui.label(RichText::new(glyph).strong().color(ui.visuals().text_color()));
+            });
+        })
+        .response
+        .on_hover_text(name);
 }
 
 impl eframe::App for App {
@@ -355,6 +387,71 @@ impl App {
         a.head_tracking || a.no_video || a.print_pose
     }
 
+    fn button_view(&mut self, ui: &mut egui::Ui) {
+        let link = self.engine.as_ref().and_then(|e| e.shared.link.lock().unwrap().clone());
+        let active_link = link.as_ref().filter(|link| link.alive());
+        let link_id = active_link.map(|link| Arc::as_ptr(link) as usize);
+        if link_id != self.back_exit_link {
+            self.back_exit_link = link_id;
+            if let Some(link) = active_link {
+                let _ = link.set_back_exit(self.back_exit_enabled);
+            }
+        }
+        if let Some(link) = active_link {
+            for event in link.take_button_events() {
+                let key = (event.source, event.code);
+                if event.pressed {
+                    self.pressed_buttons.insert(key);
+                } else {
+                    self.pressed_buttons.remove(&key);
+                }
+            }
+        } else {
+            self.pressed_buttons.clear();
+        }
+
+        let mut back_exit_changed = false;
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Buttons").strong());
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(42.0);
+                        button_keycap(ui, "↑", "5D Up", self.button_pressed(EP_BUTTON_SRC_5D, 103), 34.0);
+                    });
+                    ui.horizontal(|ui| {
+                        button_keycap(ui, "←", "5D Left", self.button_pressed(EP_BUTTON_SRC_5D, 105), 34.0);
+                        button_keycap(ui, "OK", "5D Center", self.button_pressed(EP_BUTTON_SRC_5D, 28), 34.0);
+                        button_keycap(ui, "→", "5D Right", self.button_pressed(EP_BUTTON_SRC_5D, 106), 34.0);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.add_space(42.0);
+                        button_keycap(ui, "↓", "5D Down", self.button_pressed(EP_BUTTON_SRC_5D, 108), 34.0);
+                    });
+                });
+                ui.add_space(10.0);
+                ui.vertical(|ui| {
+                    button_keycap(ui, "BACK", "Back", self.button_pressed(EP_BUTTON_SRC_GPIO_KEYS, 158), 62.0);
+                    ui.add_space(6.0);
+                    button_keycap(ui, "ENTER", "Enter", self.button_pressed(EP_BUTTON_SRC_GPIO_KEYS, 28), 62.0);
+                });
+            });
+            back_exit_changed = ui
+                .checkbox(&mut self.back_exit_enabled, "Back exits bridge")
+                .on_hover_text("A short click or long hold exits Eyepiece")
+                .changed();
+        });
+        if back_exit_changed {
+            if let Some(link) = active_link {
+                let _ = link.set_back_exit(self.back_exit_enabled);
+            }
+        }
+    }
+
+    fn button_pressed(&self, source: u8, code: u16) -> bool {
+        self.pressed_buttons.contains(&(source, code))
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("Eyepiece");
@@ -419,6 +516,8 @@ impl App {
             });
         }
         self.undo_banner(ui);
+        ui.add_space(6.0);
+        self.button_view(ui);
         ui.add_space(6.0);
 
         let a = &mut self.saved.args;
