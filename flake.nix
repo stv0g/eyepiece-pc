@@ -59,11 +59,6 @@
 
             preBuild = lib.optionalString stdenv.hostPlatform.isDarwin (swiftLinkerFlags pkgs);
 
-            postFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
-              wrapProgram "$out/bin/eyepiece-gui" \
-                --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath linuxLibraries}"
-            '';
-
             meta = {
               description = "Stream PC screen and head tracking to DJI Goggles";
               license = lib.licenses.agpl3Plus;
